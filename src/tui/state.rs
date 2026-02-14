@@ -115,18 +115,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(library_path: PathBuf, db: Database) -> Result<Self> {
         let directories = db.get_all_directories()?;
-        let mut tree = TreeState::new(directories);
-
-        // Expand root directories by default
-        let root_dirs: Vec<i64> = tree
-            .directories
-            .iter()
-            .filter(|d| d.parent_id.is_none())
-            .map(|d| d.id)
-            .collect();
-        for id in root_dirs {
-            tree.expanded.insert(id);
-        }
+        let tree = TreeState::new(directories);
 
         let mut state = Self {
             library_path,
