@@ -141,6 +141,25 @@ impl Database {
         Ok(())
     }
 
+    /// Get all directories
+    pub fn get_all_directories(&self) -> Result<Vec<Directory>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT id, path, parent_id, rating, mtime FROM directories ORDER BY path",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(Directory {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                parent_id: row.get(2)?,
+                rating: row.get(3)?,
+                mtime: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ==================== File Operations ====================
 
     /// Insert a new file, returns its ID
@@ -192,6 +211,29 @@ impl Database {
         )?;
 
         let rows = stmt.query_map([directory_id], |row| {
+            Ok(File {
+                id: row.get(0)?,
+                directory_id: row.get(1)?,
+                filename: row.get(2)?,
+                size: row.get(3)?,
+                mtime: row.get(4)?,
+                hash: row.get(5)?,
+                rating: row.get(6)?,
+                media_type: row.get(7)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get all files in the database
+    pub fn get_all_files(&self) -> Result<Vec<File>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type
+             FROM files ORDER BY directory_id, filename",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
             Ok(File {
                 id: row.get(0)?,
                 directory_id: row.get(1)?,

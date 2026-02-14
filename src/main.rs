@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use picman::cli::run_init;
+use picman::cli::{run_init, run_sync};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -24,6 +24,9 @@ enum Commands {
     },
     /// Sync database with filesystem changes
     Sync {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
         /// Recompute hashes for changed files
         #[arg(long)]
         hash: bool,
@@ -72,9 +75,19 @@ fn main() -> Result<()> {
                 stats.directories, stats.files, stats.images, stats.videos
             );
         }
-        Some(Commands::Sync { hash }) => {
-            println!("Syncing... (hash={})", hash);
-            // TODO: Implement sync
+        Some(Commands::Sync { path, hash }) => {
+            let stats = run_sync(&path)?;
+            println!(
+                "Synced: +{} -{} directories, +{} -{} ~{} files",
+                stats.directories_added,
+                stats.directories_removed,
+                stats.files_added,
+                stats.files_removed,
+                stats.files_modified
+            );
+            if hash {
+                println!("Hash recomputation not yet implemented");
+            }
         }
         Some(Commands::Dupes { subdir }) => {
             println!("Finding duplicates...");
