@@ -3,9 +3,9 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh3::Xxh3;
 
-const BUFFER_SIZE: usize = 8 * 1024; // 8KB buffer for streaming
+const BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming
 
 /// Compute xxHash3-64 hash of a file, returning a 16-char hex string
 pub fn compute_file_hash(path: &Path) -> Result<String> {
@@ -14,7 +14,7 @@ pub fn compute_file_hash(path: &Path) -> Result<String> {
 
     let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
     let mut buffer = vec![0u8; BUFFER_SIZE];
-    let mut all_data = Vec::new();
+    let mut hasher = Xxh3::new();
 
     loop {
         let bytes_read = reader
@@ -25,12 +25,10 @@ pub fn compute_file_hash(path: &Path) -> Result<String> {
             break;
         }
 
-        all_data.extend_from_slice(&buffer[..bytes_read]);
+        hasher.update(&buffer[..bytes_read]);
     }
 
-    let hash = xxh3_64(&all_data);
-
-    Ok(format!("{:016x}", hash))
+    Ok(format!("{:016x}", hasher.digest()))
 }
 
 #[cfg(test)]
