@@ -20,23 +20,19 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let content_area = main_chunks[0];
     let status_area = main_chunks[1];
 
-    // Content layout: tree on left, right pane on right
+    // 3-column layout: tree | file list | preview (largest)
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+        .constraints([
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Percentage(65),
+        ])
         .split(content_area);
 
     let tree_area = content_chunks[0];
-    let right_pane = content_chunks[1];
-
-    // Right pane: file list on top, preview on bottom
-    let right_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(right_pane);
-
-    let file_list_area = right_chunks[0];
-    let preview_area = right_chunks[1];
+    let file_list_area = content_chunks[1];
+    let preview_area = content_chunks[2];
 
     // Render widgets
     render_directory_tree(frame, tree_area, state);
