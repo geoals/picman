@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use picman::cli::{run_init, run_list, run_rate, run_sync, run_tag, ListOptions, TagOptions};
+use picman::tui::run_tui;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -188,8 +189,7 @@ fn main() -> Result<()> {
         None => {
             // Launch TUI
             let library = cli.library.unwrap_or_else(|| PathBuf::from("."));
-            println!("Launching TUI for: {}", library.display());
-            // TODO: Implement TUI
+            run_tui(&library)?;
         }
     }
 

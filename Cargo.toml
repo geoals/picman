@@ -18,7 +18,7 @@ walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # TUI
-ratatui = "0.28"
+ratatui = "0.30"
 crossterm = "0.28"
 ratatui-image = { version = "1", features = ["rustix"] }
 image = "0.25"
