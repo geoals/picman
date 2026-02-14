@@ -7,6 +7,7 @@ use crossterm::{
 use ratatui::prelude::*;
 use std::io::stdout;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::db::Database;
 
@@ -57,28 +58,46 @@ fn run_app(
     loop {
         terminal.draw(|frame| render(frame, state))?;
 
+        // Wait for first event
         if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
+            if key.kind == KeyEventKind::Press {
+                if handle_key(key.code, state)? {
+                    return Ok(());
+                }
             }
+        }
 
-            match key.code {
-                KeyCode::Char('q') => return Ok(()),
-                KeyCode::Char('j') | KeyCode::Down => state.move_down(),
-                KeyCode::Char('k') | KeyCode::Up => state.move_up(),
-                KeyCode::Char('h') | KeyCode::Left => state.move_left(),
-                KeyCode::Char('l') | KeyCode::Right => state.move_right(),
-                KeyCode::Tab => state.toggle_focus(),
-                KeyCode::Enter => state.select()?,
-                KeyCode::Char('1') => state.set_rating(Some(1))?,
-                KeyCode::Char('2') => state.set_rating(Some(2))?,
-                KeyCode::Char('3') => state.set_rating(Some(3))?,
-                KeyCode::Char('4') => state.set_rating(Some(4))?,
-                KeyCode::Char('5') => state.set_rating(Some(5))?,
-                KeyCode::Char('0') => state.set_rating(None)?,
-                KeyCode::Char('?') => state.toggle_help(),
-                _ => {}
+        // Drain all pending events to avoid lag during rapid navigation
+        while event::poll(Duration::ZERO)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    if handle_key(key.code, state)? {
+                        return Ok(());
+                    }
+                }
             }
         }
     }
+}
+
+/// Handle a key press. Returns true if the app should quit.
+fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
+    match code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('j') | KeyCode::Down => state.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => state.move_up(),
+        KeyCode::Char('h') | KeyCode::Left => state.move_left(),
+        KeyCode::Char('l') | KeyCode::Right => state.move_right(),
+        KeyCode::Tab => state.toggle_focus(),
+        KeyCode::Enter => state.select()?,
+        KeyCode::Char('1') => state.set_rating(Some(1))?,
+        KeyCode::Char('2') => state.set_rating(Some(2))?,
+        KeyCode::Char('3') => state.set_rating(Some(3))?,
+        KeyCode::Char('4') => state.set_rating(Some(4))?,
+        KeyCode::Char('5') => state.set_rating(Some(5))?,
+        KeyCode::Char('0') => state.set_rating(None)?,
+        KeyCode::Char('?') => state.toggle_help(),
+        _ => {}
+    }
+    Ok(false)
 }
