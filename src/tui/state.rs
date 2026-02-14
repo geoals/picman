@@ -1,9 +1,23 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use ratatui_image::protocol::StatefulProtocol;
 
 use crate::db::{Database, Directory, File};
+
+/// Cached image preview state
+pub struct PreviewCache {
+    pub path: PathBuf,
+    pub protocol: Box<dyn StatefulProtocol>,
+}
+
+impl PreviewCache {
+    pub fn new(path: PathBuf, protocol: Box<dyn StatefulProtocol>) -> Self {
+        Self { path, protocol }
+    }
+}
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +124,7 @@ pub struct AppState {
     pub tree: TreeState,
     pub file_list: FileListState,
     pub show_help: bool,
+    pub preview_cache: RefCell<Option<PreviewCache>>,
 }
 
 impl AppState {
@@ -124,6 +139,7 @@ impl AppState {
             tree,
             file_list: FileListState::new(),
             show_help: false,
+            preview_cache: RefCell::new(None),
         };
 
         // Load files for initial selection
