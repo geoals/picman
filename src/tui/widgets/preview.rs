@@ -12,7 +12,12 @@ use crate::tui::state::{AppState, PreviewCache};
 static PICKER: OnceLock<Mutex<Option<Picker>>> = OnceLock::new();
 
 fn get_picker_mutex() -> &'static Mutex<Option<Picker>> {
-    PICKER.get_or_init(|| Mutex::new(Picker::from_termios().ok()))
+    PICKER.get_or_init(|| {
+        Mutex::new(Picker::from_termios().ok().map(|mut picker| {
+            picker.guess_protocol();
+            picker
+        }))
+    })
 }
 
 fn is_image_file(path: &std::path::Path) -> bool {
