@@ -76,7 +76,7 @@ fn main() -> Result<()> {
             );
         }
         Some(Commands::Sync { path, hash }) => {
-            let stats = run_sync(&path)?;
+            let stats = run_sync(&path, hash)?;
             println!(
                 "Synced: +{} -{} directories, +{} -{} ~{} files",
                 stats.directories_added,
@@ -86,7 +86,10 @@ fn main() -> Result<()> {
                 stats.files_modified
             );
             if hash {
-                println!("Hash recomputation not yet implemented");
+                println!(
+                    "Hashed: {} files ({} errors)",
+                    stats.files_hashed, stats.hash_errors
+                );
             }
         }
         Some(Commands::Dupes { subdir }) => {

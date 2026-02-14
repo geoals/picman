@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use rusqlite::{params, OptionalExtension};
 
@@ -24,6 +26,13 @@ pub struct File {
     pub hash: Option<String>,
     pub rating: Option<i32>,
     pub media_type: Option<String>,
+}
+
+/// Represents a file that needs hashing (id + full path)
+#[derive(Debug, Clone)]
+pub struct FileToHash {
+    pub id: i64,
+    pub path: PathBuf,
 }
 
 impl Database {
@@ -409,6 +418,37 @@ impl Database {
 
         Ok(tags)
     }
+
+    // ==================== Hash Operations ====================
+
+    /// Get all files that need hashing (where hash IS NULL)
+    pub fn get_files_needing_hash(&self) -> Result<Vec<FileToHash>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, d.path, f.filename
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.hash IS NULL
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let files: Vec<FileToHash> = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let dir_path: String = row.get(1)?;
+                let filename: String = row.get(2)?;
+
+                let path = if dir_path.is_empty() {
+                    PathBuf::from(&filename)
+                } else {
+                    PathBuf::from(&dir_path).join(&filename)
+                };
+
+                Ok(FileToHash { id, path })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
 }
 
 #[cfg(test)]
@@ -570,5 +610,38 @@ mod tests {
         db.remove_directory_tag(dir_id, "travel").unwrap();
         let tags = db.get_directory_tags(dir_id).unwrap();
         assert_eq!(tags, vec!["2024"]);
+    }
+
+    #[test]
+    fn test_get_files_needing_hash() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory structure
+        let dir1_id = db.insert_directory("photos", None, None).unwrap();
+        let dir2_id = db.insert_directory("photos/vacation", Some(dir1_id), None).unwrap();
+
+        // Insert files - some with hash, some without
+        let file1_id = db.insert_file(dir1_id, "image1.jpg", 1024, 12345, Some("image")).unwrap();
+        let file2_id = db.insert_file(dir1_id, "image2.jpg", 2048, 12346, Some("image")).unwrap();
+        let file3_id = db.insert_file(dir2_id, "vacation.jpg", 3072, 12347, Some("image")).unwrap();
+
+        // Set hash on file1 only
+        db.set_file_hash(file1_id, "abc123").unwrap();
+
+        // Get files needing hash
+        let files = db.get_files_needing_hash().unwrap();
+
+        // Should return file2 and file3 (both have NULL hash)
+        assert_eq!(files.len(), 2);
+
+        // Verify we get correct file IDs
+        let ids: Vec<i64> = files.iter().map(|f| f.id).collect();
+        assert!(ids.contains(&file2_id));
+        assert!(ids.contains(&file3_id));
+
+        // Verify paths are constructed correctly
+        let paths: Vec<String> = files.iter().map(|f| f.path.to_string_lossy().to_string()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("photos/image2.jpg")));
+        assert!(paths.iter().any(|p| p.ends_with("photos/vacation/vacation.jpg")));
     }
 }
