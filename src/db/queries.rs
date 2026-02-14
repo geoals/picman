@@ -419,6 +419,117 @@ impl Database {
         Ok(tags)
     }
 
+    // ==================== Query Operations ====================
+
+    /// Get a file by its relative path (e.g., "photos/vacation/beach.jpg")
+    pub fn get_file_by_path(&self, relative_path: &str) -> Result<Option<File>> {
+        // Split into directory path and filename
+        let path = std::path::Path::new(relative_path);
+        let filename = match path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => return Ok(None),
+        };
+        let dir_path = path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Look up directory
+        let dir = self.get_directory_by_path(&dir_path)?;
+        let dir = match dir {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        // Look up file in that directory
+        self.get_file_by_name(dir.id, &filename)
+    }
+
+    /// Get all files with their directory paths
+    pub fn get_all_files_with_paths(&self) -> Result<Vec<(File, String)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let file = File {
+                id: row.get(0)?,
+                directory_id: row.get(1)?,
+                filename: row.get(2)?,
+                size: row.get(3)?,
+                mtime: row.get(4)?,
+                hash: row.get(5)?,
+                rating: row.get(6)?,
+                media_type: row.get(7)?,
+            };
+            let dir_path: String = row.get(8)?;
+            Ok((file, dir_path))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get files filtered by minimum rating
+    pub fn get_files_by_rating(&self, min_rating: i32) -> Result<Vec<(File, String)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.rating >= ?1
+             ORDER BY f.rating DESC, d.path, f.filename",
+        )?;
+
+        let rows = stmt.query_map([min_rating], |row| {
+            let file = File {
+                id: row.get(0)?,
+                directory_id: row.get(1)?,
+                filename: row.get(2)?,
+                size: row.get(3)?,
+                mtime: row.get(4)?,
+                hash: row.get(5)?,
+                rating: row.get(6)?,
+                media_type: row.get(7)?,
+            };
+            let dir_path: String = row.get(8)?;
+            Ok((file, dir_path))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get files that have a specific tag
+    pub fn get_files_by_tag(&self, tag: &str) -> Result<Vec<(File, String)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             JOIN file_tags ft ON f.id = ft.file_id
+             JOIN tags t ON ft.tag_id = t.id
+             WHERE t.name = ?1
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let rows = stmt.query_map([tag], |row| {
+            let file = File {
+                id: row.get(0)?,
+                directory_id: row.get(1)?,
+                filename: row.get(2)?,
+                size: row.get(3)?,
+                mtime: row.get(4)?,
+                hash: row.get(5)?,
+                rating: row.get(6)?,
+                media_type: row.get(7)?,
+            };
+            let dir_path: String = row.get(8)?;
+            Ok((file, dir_path))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ==================== Hash Operations ====================
 
     /// Get all files that need hashing (where hash IS NULL)
@@ -486,9 +597,9 @@ mod tests {
         assert_eq!(roots[0].path, "photos");
 
         // Update rating
-        db.set_directory_rating(root_id, Some(8)).unwrap();
+        db.set_directory_rating(root_id, Some(4)).unwrap();
         let updated = db.get_directory(root_id).unwrap().unwrap();
-        assert_eq!(updated.rating, Some(8));
+        assert_eq!(updated.rating, Some(4));
 
         // Delete
         db.delete_directory(child_id).unwrap();
@@ -525,9 +636,9 @@ mod tests {
         assert_eq!(updated.hash, Some("abc123".to_string()));
 
         // Update rating
-        db.set_file_rating(file_id, Some(9)).unwrap();
+        db.set_file_rating(file_id, Some(5)).unwrap();
         let updated = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
-        assert_eq!(updated.rating, Some(9));
+        assert_eq!(updated.rating, Some(5));
 
         // Delete
         db.delete_file(file_id).unwrap();
@@ -643,5 +754,151 @@ mod tests {
         let paths: Vec<String> = files.iter().map(|f| f.path.to_string_lossy().to_string()).collect();
         assert!(paths.iter().any(|p| p.ends_with("photos/image2.jpg")));
         assert!(paths.iter().any(|p| p.ends_with("photos/vacation/vacation.jpg")));
+    }
+
+    #[test]
+    fn test_get_file_by_path() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory structure
+        let dir1_id = db.insert_directory("photos", None, None).unwrap();
+        let dir2_id = db
+            .insert_directory("photos/vacation", Some(dir1_id), None)
+            .unwrap();
+
+        // Insert files
+        db.insert_file(dir1_id, "image1.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        db.insert_file(dir2_id, "beach.jpg", 2048, 12346, Some("image"))
+            .unwrap();
+
+        // Find file in root dir
+        let file = db.get_file_by_path("photos/image1.jpg").unwrap();
+        assert!(file.is_some());
+        assert_eq!(file.unwrap().filename, "image1.jpg");
+
+        // Find file in nested dir
+        let file = db.get_file_by_path("photos/vacation/beach.jpg").unwrap();
+        assert!(file.is_some());
+        assert_eq!(file.unwrap().filename, "beach.jpg");
+
+        // Non-existent file returns None
+        let file = db.get_file_by_path("photos/nonexistent.jpg").unwrap();
+        assert!(file.is_none());
+
+        // Non-existent directory returns None
+        let file = db.get_file_by_path("nonexistent/image.jpg").unwrap();
+        assert!(file.is_none());
+    }
+
+    #[test]
+    fn test_get_files_by_rating() {
+        let db = Database::open_in_memory().unwrap();
+
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        // Insert files with various ratings
+        let file1_id = db
+            .insert_file(dir_id, "great.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        let file2_id = db
+            .insert_file(dir_id, "good.jpg", 1024, 12346, Some("image"))
+            .unwrap();
+        let file3_id = db
+            .insert_file(dir_id, "ok.jpg", 1024, 12347, Some("image"))
+            .unwrap();
+        db.insert_file(dir_id, "unrated.jpg", 1024, 12348, Some("image"))
+            .unwrap();
+
+        db.set_file_rating(file1_id, Some(5)).unwrap();
+        db.set_file_rating(file2_id, Some(4)).unwrap();
+        db.set_file_rating(file3_id, Some(3)).unwrap();
+
+        // Get 4+ rated files
+        let files = db.get_files_by_rating(4).unwrap();
+        assert_eq!(files.len(), 2);
+        let names: Vec<&str> = files.iter().map(|(f, _)| f.filename.as_str()).collect();
+        assert!(names.contains(&"great.jpg"));
+        assert!(names.contains(&"good.jpg"));
+
+        // Get 5+ rated files
+        let files = db.get_files_by_rating(5).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0.filename, "great.jpg");
+
+        // Get 3+ rated files (excludes unrated)
+        let files = db.get_files_by_rating(3).unwrap();
+        assert_eq!(files.len(), 3);
+
+        // Directory path is included
+        assert_eq!(files[0].1, "photos");
+    }
+
+    #[test]
+    fn test_get_files_by_tag() {
+        let db = Database::open_in_memory().unwrap();
+
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        let file1_id = db
+            .insert_file(dir_id, "portrait1.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        let file2_id = db
+            .insert_file(dir_id, "portrait2.jpg", 1024, 12346, Some("image"))
+            .unwrap();
+        let file3_id = db
+            .insert_file(dir_id, "landscape.jpg", 1024, 12347, Some("image"))
+            .unwrap();
+
+        db.add_file_tag(file1_id, "portrait").unwrap();
+        db.add_file_tag(file2_id, "portrait").unwrap();
+        db.add_file_tag(file2_id, "outdoor").unwrap();
+        db.add_file_tag(file3_id, "landscape").unwrap();
+
+        // Find by portrait tag
+        let files = db.get_files_by_tag("portrait").unwrap();
+        assert_eq!(files.len(), 2);
+        let names: Vec<&str> = files.iter().map(|(f, _)| f.filename.as_str()).collect();
+        assert!(names.contains(&"portrait1.jpg"));
+        assert!(names.contains(&"portrait2.jpg"));
+
+        // Find by outdoor tag
+        let files = db.get_files_by_tag("outdoor").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0.filename, "portrait2.jpg");
+
+        // Non-existent tag returns empty
+        let files = db.get_files_by_tag("nonexistent").unwrap();
+        assert!(files.is_empty());
+
+        // Directory path is included
+        let files = db.get_files_by_tag("portrait").unwrap();
+        assert_eq!(files[0].1, "photos");
+    }
+
+    #[test]
+    fn test_get_all_files_with_paths() {
+        let db = Database::open_in_memory().unwrap();
+
+        let dir1_id = db.insert_directory("photos", None, None).unwrap();
+        let dir2_id = db
+            .insert_directory("photos/vacation", Some(dir1_id), None)
+            .unwrap();
+
+        db.insert_file(dir1_id, "image1.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        db.insert_file(dir2_id, "beach.jpg", 2048, 12346, Some("image"))
+            .unwrap();
+
+        let files = db.get_all_files_with_paths().unwrap();
+        assert_eq!(files.len(), 2);
+
+        // Check paths are included correctly
+        let file_paths: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(f, dir)| (f.filename.as_str(), dir.as_str()))
+            .collect();
+        assert!(file_paths.contains(&("image1.jpg", "photos")));
+        assert!(file_paths.contains(&("beach.jpg", "photos/vacation")));
     }
 }

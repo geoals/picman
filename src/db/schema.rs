@@ -31,7 +31,7 @@ impl Database {
                 id INTEGER PRIMARY KEY,
                 path TEXT UNIQUE NOT NULL,
                 parent_id INTEGER REFERENCES directories(id),
-                rating INTEGER CHECK (rating IS NULL OR (rating >= 0 AND rating <= 10)),
+                rating INTEGER CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5)),
                 mtime INTEGER
             );
 
@@ -42,7 +42,7 @@ impl Database {
                 size INTEGER NOT NULL,
                 mtime INTEGER NOT NULL,
                 hash TEXT,
-                rating INTEGER CHECK (rating IS NULL OR (rating >= 0 AND rating <= 10)),
+                rating INTEGER CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5)),
                 media_type TEXT CHECK (media_type IN ('image', 'video', 'other')),
                 UNIQUE(directory_id, filename)
             );
@@ -125,35 +125,47 @@ mod tests {
     fn test_directory_rating_constraints() {
         let db = Database::open_in_memory().unwrap();
 
-        // Valid rating
-        db.conn
-            .execute(
-                "INSERT INTO directories (path, rating) VALUES ('test', 5)",
-                [],
-            )
-            .expect("Should accept valid rating");
+        // Valid ratings (1-5)
+        for rating in 1..=5 {
+            db.conn
+                .execute(
+                    &format!(
+                        "INSERT INTO directories (path, rating) VALUES ('test{}', {})",
+                        rating, rating
+                    ),
+                    [],
+                )
+                .expect(&format!("Should accept rating {}", rating));
+        }
 
         // NULL rating is allowed
         db.conn
             .execute(
-                "INSERT INTO directories (path, rating) VALUES ('test2', NULL)",
+                "INSERT INTO directories (path, rating) VALUES ('test_null', NULL)",
                 [],
             )
             .expect("Should accept NULL rating");
 
-        // Rating too high
+        // Rating too high (6)
         let result = db.conn.execute(
-            "INSERT INTO directories (path, rating) VALUES ('test3', 11)",
+            "INSERT INTO directories (path, rating) VALUES ('test_high', 6)",
             [],
         );
-        assert!(result.is_err(), "Should reject rating > 10");
+        assert!(result.is_err(), "Should reject rating > 5");
+
+        // Rating too low (0)
+        let result = db.conn.execute(
+            "INSERT INTO directories (path, rating) VALUES ('test_zero', 0)",
+            [],
+        );
+        assert!(result.is_err(), "Should reject rating < 1");
 
         // Negative rating
         let result = db.conn.execute(
-            "INSERT INTO directories (path, rating) VALUES ('test4', -1)",
+            "INSERT INTO directories (path, rating) VALUES ('test_neg', -1)",
             [],
         );
-        assert!(result.is_err(), "Should reject rating < 0");
+        assert!(result.is_err(), "Should reject negative rating");
     }
 
     #[test]

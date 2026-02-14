@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use picman::cli::{run_init, run_sync};
+use picman::cli::{run_init, run_list, run_rate, run_sync, run_tag, ListOptions, TagOptions};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -38,12 +38,39 @@ enum Commands {
     },
     /// List files matching criteria
     List {
-        /// Minimum rating (e.g., "8+")
+        /// Path to library root
+        path: PathBuf,
+        /// Minimum rating (1-5)
         #[arg(long)]
-        rating: Option<String>,
+        rating: Option<i32>,
         /// Filter by tag
         #[arg(long)]
         tag: Option<String>,
+    },
+    /// Rate a file (1-5 stars)
+    Rate {
+        /// Path to library root
+        library: PathBuf,
+        /// File to rate (relative to library)
+        file: PathBuf,
+        /// Rating 1-5 stars (omit to clear)
+        rating: Option<i32>,
+    },
+    /// Add or remove tags from a file
+    Tag {
+        /// Path to library root
+        library: PathBuf,
+        /// File to tag (relative to library)
+        file: PathBuf,
+        /// Tags to add
+        #[arg(short, long)]
+        add: Vec<String>,
+        /// Tags to remove
+        #[arg(short, long)]
+        remove: Vec<String>,
+        /// List current tags
+        #[arg(short, long)]
+        list: bool,
     },
     /// Create symlink view of filtered files
     View {
@@ -99,10 +126,51 @@ fn main() -> Result<()> {
             }
             // TODO: Implement dupes
         }
-        Some(Commands::List { rating, tag }) => {
-            println!("Listing files...");
-            // TODO: Implement list
-            let _ = (rating, tag);
+        Some(Commands::List { path, rating, tag }) => {
+            let options = ListOptions {
+                min_rating: rating,
+                tag,
+            };
+            let files = run_list(&path, options)?;
+            for file in &files {
+                let rating_str = file
+                    .rating
+                    .map(|r| format!(" [{}]", "*".repeat(r as usize)))
+                    .unwrap_or_default();
+                let tags_str = if file.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", file.tags.join(", "))
+                };
+                println!("{}{}{}", file.path, rating_str, tags_str);
+            }
+            println!("{} files", files.len());
+        }
+        Some(Commands::Rate {
+            library,
+            file,
+            rating,
+        }) => {
+            run_rate(&library, &file, rating)?;
+            match rating {
+                Some(r) => println!("Rated {} with {} stars", file.display(), r),
+                None => println!("Cleared rating from {}", file.display()),
+            }
+        }
+        Some(Commands::Tag {
+            library,
+            file,
+            add,
+            remove,
+            list,
+        }) => {
+            let options = TagOptions { add, remove, list };
+            let tags = run_tag(&library, &file, options)?;
+            if tags.is_empty() {
+                println!("{}: no tags", file.display());
+            } else {
+                println!("{}: {}", file.display(), tags.join(", "));
+            }
         }
         Some(Commands::View { rating, tag, output }) => {
             println!("Creating view at: {}", output.display());
