@@ -53,6 +53,8 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool) -> Result<SyncStats> 
     Ok(stats)
 }
 
+const HASH_BATCH_SIZE: usize = 1000;
+
 /// Hash files that have NULL hash values
 fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
     let files_to_hash = db.get_files_needing_hash()?;
@@ -62,43 +64,47 @@ fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
         return Ok((0, 0));
     }
 
-    let hashed = AtomicUsize::new(0);
-    let errors = AtomicUsize::new(0);
+    let mut total_hashed = 0usize;
+    let mut total_errors = 0usize;
 
-    // Compute hashes in parallel
-    let results: Vec<_> = files_to_hash
-        .par_iter()
-        .map(|file| {
-            let full_path = library_path.join(&file.path);
-            let result = compute_file_hash(&full_path);
+    // Process in batches for resumability
+    for (batch_idx, batch) in files_to_hash.chunks(HASH_BATCH_SIZE).enumerate() {
+        let batch_start = batch_idx * HASH_BATCH_SIZE;
+        let hashed_in_batch = AtomicUsize::new(0);
 
-            let current = hashed.fetch_add(1, Ordering::Relaxed) + 1;
-            print!("\rHashing: {}/{}", current, total);
-            let _ = io::stdout().flush();
+        // Compute hashes in parallel for this batch
+        let results: Vec<_> = batch
+            .par_iter()
+            .map(|file| {
+                let full_path = library_path.join(&file.path);
+                let result = compute_file_hash(&full_path);
 
-            (file.id, result)
-        })
-        .collect();
+                let current = batch_start + hashed_in_batch.fetch_add(1, Ordering::Relaxed) + 1;
+                print!("\rHashing: {}/{}", current, total);
+                let _ = io::stdout().flush();
 
-    println!(); // Newline after progress
+                (file.id, result)
+            })
+            .collect();
 
-    // Update database sequentially (SQLite is not thread-safe for writes)
-    for (id, result) in results {
-        match result {
-            Ok(hash) => {
-                db.set_file_hash(id, &hash)?;
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to hash file: {}", e);
-                errors.fetch_add(1, Ordering::Relaxed);
+        // Write batch to database
+        for (id, result) in results {
+            match result {
+                Ok(hash) => {
+                    db.set_file_hash(id, &hash)?;
+                    total_hashed += 1;
+                }
+                Err(e) => {
+                    eprintln!("\nWarning: Failed to hash file: {}", e);
+                    total_errors += 1;
+                }
             }
         }
     }
 
-    Ok((
-        hashed.load(Ordering::Relaxed) - errors.load(Ordering::Relaxed),
-        errors.load(Ordering::Relaxed),
-    ))
+    println!(); // Newline after progress
+
+    Ok((total_hashed, total_errors))
 }
 
 /// Sync database with filesystem
