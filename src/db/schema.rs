@@ -76,6 +76,24 @@ impl Database {
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
+
+    /// Begin a transaction for bulk operations
+    pub fn begin_transaction(&self) -> Result<()> {
+        self.conn.execute("BEGIN TRANSACTION", [])?;
+        Ok(())
+    }
+
+    /// Commit the current transaction
+    pub fn commit(&self) -> Result<()> {
+        self.conn.execute("COMMIT", [])?;
+        Ok(())
+    }
+
+    /// Rollback the current transaction
+    pub fn rollback(&self) -> Result<()> {
+        self.conn.execute("ROLLBACK", [])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

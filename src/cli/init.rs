@@ -38,6 +38,9 @@ pub struct InitStats {
 fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
     let mut stats = InitStats::default();
 
+    // Use a single transaction for all inserts (massive performance improvement)
+    db.begin_transaction()?;
+
     // Map from relative path to directory ID
     let mut dir_ids: HashMap<String, i64> = HashMap::new();
 
@@ -89,6 +92,8 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
             crate::scanner::MediaType::Other => {}
         }
     }
+
+    db.commit()?;
 
     Ok(stats)
 }
