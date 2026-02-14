@@ -164,12 +164,13 @@ impl AppState {
         Ok(())
     }
 
-    pub fn move_down(&mut self) {
+    pub fn move_down(&mut self) -> Result<()> {
         match self.focus {
             Focus::DirectoryTree => {
                 let visible_count = self.tree.visible_directories().len();
                 if visible_count > 0 && self.tree.selected_index < visible_count - 1 {
                     self.tree.selected_index += 1;
+                    self.load_files_for_selected_directory()?;
                 }
             }
             Focus::FileList => {
@@ -180,13 +181,15 @@ impl AppState {
                 }
             }
         }
+        Ok(())
     }
 
-    pub fn move_up(&mut self) {
+    pub fn move_up(&mut self) -> Result<()> {
         match self.focus {
             Focus::DirectoryTree => {
                 if self.tree.selected_index > 0 {
                     self.tree.selected_index -= 1;
+                    self.load_files_for_selected_directory()?;
                 }
             }
             Focus::FileList => {
@@ -195,6 +198,7 @@ impl AppState {
                 }
             }
         }
+        Ok(())
     }
 
     pub fn move_left(&mut self) {
@@ -250,8 +254,9 @@ impl AppState {
     pub fn select(&mut self) -> Result<()> {
         match self.focus {
             Focus::DirectoryTree => {
-                // Load files for selected directory
+                // Load files for selected directory and move to file list
                 self.load_files_for_selected_directory()?;
+                self.focus = Focus::FileList;
             }
             Focus::FileList => {
                 // Preview is automatic based on selection

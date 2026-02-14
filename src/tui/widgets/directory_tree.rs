@@ -41,9 +41,9 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
 
             let style = if idx == state.tree.selected_index {
                 if is_focused {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default().bg(Color::Cyan).fg(Color::Black)
                 } else {
-                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                    Style::default().bg(Color::Gray).fg(Color::Black)
                 }
             } else {
                 Style::default()

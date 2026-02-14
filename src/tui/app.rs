@@ -84,8 +84,8 @@ fn run_app(
 fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
     match code {
         KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('j') | KeyCode::Down => state.move_down(),
-        KeyCode::Char('k') | KeyCode::Up => state.move_up(),
+        KeyCode::Char('j') | KeyCode::Down => state.move_down()?,
+        KeyCode::Char('k') | KeyCode::Up => state.move_up()?,
         KeyCode::Char('h') | KeyCode::Left => state.move_left(),
         KeyCode::Char('l') | KeyCode::Right => state.move_right(),
         KeyCode::Tab => state.toggle_focus(),
