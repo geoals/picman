@@ -733,20 +733,18 @@ impl AppState {
                             continue;
                         }
                     }
-                    // Check rating filter (skip if directory/ancestor has matching tags)
-                    if !ancestor_has_all_filter_tags {
-                        match self.filter.rating {
-                            RatingFilter::Any => {}
-                            RatingFilter::Unrated => {
-                                if file.rating.is_some() {
-                                    continue;
-                                }
+                    // Check rating filter (always applies)
+                    match self.filter.rating {
+                        RatingFilter::Any => {}
+                        RatingFilter::Unrated => {
+                            if file.rating.is_some() {
+                                continue;
                             }
-                            RatingFilter::MinRating(min) => {
-                                match file.rating {
-                                    Some(r) if r >= min => {}
-                                    _ => continue,
-                                }
+                        }
+                        RatingFilter::MinRating(min) => {
+                            match file.rating {
+                                Some(r) if r >= min => {}
+                                _ => continue,
                             }
                         }
                     }
