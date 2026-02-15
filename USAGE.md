@@ -20,6 +20,7 @@ picman /path/to/library
 | `1-5` / `a-g` | Set rating (works on files and directories) |
 | `0` | Clear rating |
 | `t` | Add tag (opens popup with autocomplete) |
+| `o` | Operations menu (thumbnails, orientation, hash) |
 | `m` | Filter by rating/tags |
 | `?` | Toggle help overlay |
 | `q` | Quit |
@@ -29,9 +30,26 @@ picman /path/to/library
 - **Enter on file**: Opens file with default system viewer (`xdg-open` on Linux, `open` on macOS)
 - **Enter on directory**: Expands directory or moves to file list
 
-### Video Preview
+### Preview & Thumbnails
 
-Video files show a thumbnail preview extracted via ffmpeg. Thumbnails are cached in the system temp directory for fast subsequent access.
+Images and videos show preview thumbnails. Thumbnails are cached to `~/.cache/picman/thumbnails/` at 1440p resolution for fast subsequent access.
+
+- **Images**: Shows cached thumbnail if available, otherwise falls back to original file
+- **Videos**: Shows thumbnail extracted via ffmpeg (requires ffmpeg installed)
+
+### Operations Menu
+
+Press `o` to open the operations menu for batch processing on the selected directory and all subdirectories:
+
+| Key | Operation | Description |
+|-----|-----------|-------------|
+| `1` / `t` | Thumbnails | Generate preview thumbnails |
+| `2` / `o` | Orientation | Tag images as landscape/portrait (EXIF-aware) |
+| `3` / `h` | Hash | Compute file hashes |
+
+- Operations run in parallel in the background with progress shown in status bar
+- Already-processed files are skipped (existing thumbnails/tags/hashes)
+- Press `q` during an operation to cancel gracefully
 
 ### Tag Popup
 
@@ -68,10 +86,11 @@ picman init /path/to/library
 Sync database with filesystem changes.
 ```bash
 picman sync /path/to/library
-picman sync /path/to/library --hash  # also compute file hashes
+picman sync /path/to/library --hash         # also compute file hashes
+picman sync /path/to/library --orientation  # tag images as landscape/portrait
 ```
 
-During sync, image files are automatically tagged with `landscape` or `portrait` based on their dimensions. Square images are not tagged.
+The `--orientation` flag tags images based on dimensions (EXIF-aware). Square images are not tagged. You can also use the TUI operations menu (`o`) to tag orientation interactively.
 
 ### list
 List files with optional filters.

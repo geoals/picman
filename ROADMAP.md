@@ -25,7 +25,15 @@
 - [x] Rating in TUI (1-5/asdfg keys, works on files and directories)
 - [x] Tagging in TUI (t key, popup with autocomplete)
 - [x] Filtering by rating/tag/video (m key, AND logic for multiple tags)
-- [x] Auto-tagging orientation (landscape/portrait) during sync
+- [x] Orientation tagging (landscape/portrait, EXIF-aware)
+
+### Phase 4.5: Batch Operations
+- [x] Operations menu (o key) for batch processing
+- [x] Thumbnail generation with disk cache (~/.cache/picman/thumbnails/)
+- [x] Orientation tagging via TUI (recursive, parallel)
+- [x] Hash computation via TUI (recursive, parallel)
+- [x] Background processing with progress bar
+- [x] Graceful cancellation on quit
 
 ## Planned (Core)
 
@@ -62,7 +70,7 @@
 - [ ] Similar image detection (perceptual hashing - pHash/dHash)
 - [ ] Same scene detection (ML-based, different angles)
 - [ ] Face detection/grouping
-- [ ] EXIF metadata extraction
+- [x] EXIF orientation reading (for correct preview/tagging)
 
 ### Organization
 - [ ] Directory reorganization tools (rename with metadata preservation)
