@@ -1,6 +1,7 @@
 mod app;
-mod state;
+pub mod state;
 mod ui;
 mod widgets;
 
 pub use app::run_tui;
+pub use state::RatingFilter;

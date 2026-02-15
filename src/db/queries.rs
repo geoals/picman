@@ -150,6 +150,31 @@ impl Database {
         Ok(())
     }
 
+    /// Rename a directory and update all descendant paths
+    pub fn rename_directory(&self, id: i64, old_path: &str, new_path: &str) -> Result<()> {
+        let conn = self.connection();
+
+        // Update the directory itself
+        conn.execute(
+            "UPDATE directories SET path = ?1 WHERE id = ?2",
+            params![new_path, id],
+        )?;
+
+        // Update all descendants: replace old_path prefix with new_path
+        conn.execute(
+            "UPDATE directories SET path = ?1 || substr(path, ?2)
+             WHERE path LIKE ?3 AND id != ?4",
+            params![
+                new_path,
+                old_path.len() + 1,  // +1 to skip the old prefix
+                format!("{}/%", old_path),
+                id
+            ],
+        )?;
+
+        Ok(())
+    }
+
     /// Get recursive stats for a directory (file count, total size)
     /// Includes the directory itself and all descendants
     pub fn get_directory_stats(&self, dir_id: i64) -> Result<(i64, i64)> {
@@ -573,15 +598,16 @@ impl Database {
     /// For multiple tags, uses AND logic (file must have ALL tags).
     pub fn get_directories_with_matching_files(
         &self,
-        min_rating: Option<i32>,
+        rating_filter: crate::tui::state::RatingFilter,
         tags: &[String],
         video_only: bool,
     ) -> Result<std::collections::HashSet<i64>> {
         use std::collections::HashSet;
+        use crate::tui::state::RatingFilter;
 
         let mut matching_dir_ids: HashSet<i64> = HashSet::new();
 
-        if tags.is_empty() && min_rating.is_none() && !video_only {
+        if rating_filter == RatingFilter::Any && tags.is_empty() && !video_only {
             // No filter - return empty set (caller should show all)
             return Ok(matching_dir_ids);
         }
@@ -593,9 +619,17 @@ impl Database {
             conditions.push("f.media_type = 'video'".to_string());
         }
 
-        if min_rating.is_some() {
-            conditions.push("f.rating >= ?1".to_string());
-        }
+        let min_rating = match rating_filter {
+            RatingFilter::Any => None,
+            RatingFilter::Unrated => {
+                conditions.push("f.rating IS NULL".to_string());
+                None
+            }
+            RatingFilter::MinRating(r) => {
+                conditions.push("f.rating >= ?1".to_string());
+                Some(r)
+            }
+        };
 
         if !tags.is_empty() {
             let tag_param_start = if min_rating.is_some() { 2 } else { 1 };
@@ -1091,18 +1125,18 @@ mod tests {
         db.add_file_tag(file2_id, "vacation").unwrap();
 
         // No filter returns empty set
-        let result = db.get_directories_with_matching_files(None, &[], false).unwrap();
+        let result = db.get_directories_with_matching_files(crate::tui::state::RatingFilter::Any, &[], false).unwrap();
         assert!(result.is_empty());
 
         // Rating filter only
-        let result = db.get_directories_with_matching_files(Some(4), &[], false).unwrap();
+        let result = db.get_directories_with_matching_files(crate::tui::RatingFilter::MinRating(4), &[], false).unwrap();
         assert!(result.contains(&vacation_id)); // file2 has rating 5
         assert!(result.contains(&photos_id));   // ancestor of vacation
         assert!(result.contains(&root_id));     // ancestor of photos
         assert!(!result.contains(&work_id));    // file3 has rating 2
 
         // Tag filter only (single tag)
-        let result = db.get_directories_with_matching_files(None, &["family".to_string()], false).unwrap();
+        let result = db.get_directories_with_matching_files(crate::tui::RatingFilter::Any, &["family".to_string()], false).unwrap();
         assert!(result.contains(&photos_id));   // file1 has "family" tag
         assert!(result.contains(&vacation_id)); // file2 has "family" tag
         assert!(result.contains(&root_id));     // ancestor
@@ -1110,7 +1144,7 @@ mod tests {
 
         // Tag filter only (multiple tags - AND logic)
         let result = db.get_directories_with_matching_files(
-            None,
+            crate::tui::RatingFilter::Any,
             &["family".to_string(), "vacation".to_string()],
             false,
         ).unwrap();
@@ -1121,7 +1155,7 @@ mod tests {
 
         // Combined rating and tag filter
         let result = db.get_directories_with_matching_files(
-            Some(4),
+            crate::tui::RatingFilter::MinRating(4),
             &["family".to_string()],
             false,
         ).unwrap();

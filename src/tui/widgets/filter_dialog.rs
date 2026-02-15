@@ -4,11 +4,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-use crate::tui::state::{FilterDialogFocus, FilterDialogState};
+use crate::tui::state::{FilterDialogFocus, FilterDialogState, RatingFilter};
 
 pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
-    let popup_width = 40;
-    let popup_height = 16;
+    let popup_width = 50;
+    let popup_height = 18;
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
 
@@ -19,47 +19,59 @@ pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialog
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Filter ");
+        .title(" Filter ")
+        .padding(ratatui::widgets::Padding::horizontal(1));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    // Split into sections
+    // Split into sections with more spacing
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),  // Top padding
             Constraint::Length(2),  // Rating row
-            Constraint::Length(1),  // Video filter row
+            Constraint::Length(1),  // Spacing
+            Constraint::Length(2),  // Video filter row
+            Constraint::Length(1),  // Spacing
             Constraint::Length(2),  // Selected tags
             Constraint::Length(2),  // Tag input
-            Constraint::Min(4),     // Autocomplete list
+            Constraint::Min(3),     // Autocomplete list
             Constraint::Length(2),  // Help text
         ])
         .split(inner);
 
     // Rating row
-    render_rating_row(frame, chunks[0], dialog);
+    render_rating_row(frame, chunks[1], dialog);
 
     // Video filter row
-    render_video_row(frame, chunks[1], dialog);
+    render_video_row(frame, chunks[3], dialog);
 
     // Selected tags row
-    render_selected_tags(frame, chunks[2], dialog);
+    render_selected_tags(frame, chunks[5], dialog);
 
     // Tag input row
-    render_tag_input(frame, chunks[3], dialog);
+    render_tag_input(frame, chunks[6], dialog);
 
-    // Autocomplete list
-    render_autocomplete_list(frame, chunks[4], dialog);
+    // Autocomplete list (only show highlight when tag section is focused)
+    render_autocomplete_list(frame, chunks[7], dialog);
 
     // Help text
-    render_help_text(frame, chunks[5]);
+    render_help_text(frame, chunks[8]);
 }
 
 fn render_video_row(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
+    let is_focused = dialog.focus == FilterDialogFocus::VideoOnly;
     let checkbox = if dialog.video_only { "[x]" } else { "[ ]" };
-    let text = format!("Video only: {}  (press v to toggle)", checkbox);
-    let paragraph = Paragraph::new(text);
+
+    let style = if is_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let text = format!("Video only: {}  (v or Space to toggle)", checkbox);
+    let paragraph = Paragraph::new(text).style(style);
     frame.render_widget(paragraph, area);
 }
 
@@ -71,28 +83,31 @@ fn render_rating_row(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) 
         Style::default().fg(Color::Gray)
     };
 
-    // Build rating display: "Rating: [Any] 1 2 3 4 5"
+    // Build rating display: "Rating: [Any] [Unrated] 1 2 3 4 5"
     let mut spans = vec![
         Span::styled("Rating: ", focus_style),
     ];
 
-    // "Any" option
-    let any_style = if dialog.rating_selected.is_none() {
-        Style::default().bg(Color::Cyan).fg(Color::Black)
-    } else {
-        Style::default()
+    // Helper to get style
+    let sel = |selected: bool| {
+        if selected {
+            Style::default().bg(Color::Cyan).fg(Color::Black)
+        } else {
+            Style::default()
+        }
     };
-    spans.push(Span::styled("[Any]", any_style));
+
+    // "Any" option
+    spans.push(Span::styled("[Any]", sel(dialog.rating_filter == RatingFilter::Any)));
+    spans.push(Span::raw(" "));
+
+    // "Unrated" option
+    spans.push(Span::styled("[Unrated]", sel(dialog.rating_filter == RatingFilter::Unrated)));
     spans.push(Span::raw(" "));
 
     // Numbers 1-5
     for i in 1..=5 {
-        let num_style = if dialog.rating_selected == Some(i) {
-            Style::default().bg(Color::Cyan).fg(Color::Black)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(format!("{}", i), num_style));
+        spans.push(Span::styled(format!("{}", i), sel(dialog.rating_filter == RatingFilter::MinRating(i))));
         if i < 5 {
             spans.push(Span::raw(" "));
         }
@@ -132,13 +147,16 @@ fn render_tag_input(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
 }
 
 fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
+    let is_tag_focused = dialog.focus == FilterDialogFocus::Tag;
+
     let items: Vec<ListItem> = dialog
         .filtered_tags
         .iter()
         .enumerate()
         .take(area.height as usize)
         .map(|(idx, tag)| {
-            let style = if idx == dialog.tag_list_index {
+            // Only highlight selection when tag section is focused
+            let style = if is_tag_focused && idx == dialog.tag_list_index {
                 Style::default().bg(Color::Cyan).fg(Color::Black)
             } else {
                 Style::default()
@@ -153,7 +171,7 @@ fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialog
 }
 
 fn render_help_text(frame: &mut Frame, area: Rect) {
-    let help = "Tab:Switch  0:Clear  Enter:Apply  Esc:Cancel";
+    let help = "Tab/Arrows:Navigate  0:Clear  m/Esc:Close";
     let paragraph = Paragraph::new(help)
         .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(paragraph, area);

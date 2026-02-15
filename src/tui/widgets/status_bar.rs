@@ -4,7 +4,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::tui::state::{AppState, Focus};
+use crate::tui::state::{AppState, Focus, RatingFilter};
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     use std::sync::atomic::Ordering;
@@ -44,8 +44,10 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         if state.filter.video_only {
             filter_parts.push("video".to_string());
         }
-        if let Some(r) = state.filter.min_rating {
-            filter_parts.push(format!("{}+", r));
+        match state.filter.rating {
+            RatingFilter::Any => {}
+            RatingFilter::Unrated => filter_parts.push("unrated".to_string()),
+            RatingFilter::MinRating(r) => filter_parts.push(format!("{}+", r)),
         }
         for t in &state.filter.tags {
             filter_parts.push(format!("#{}", t));

@@ -789,10 +789,13 @@ fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
             None => (file_path.clone(), false), // Fall back to original image
         }
     } else if is_video_file(&file_path) {
-        match get_cached_video_thumbnail(&file_path) {
+        // Try cached thumbnail first, auto-generate if missing
+        match get_cached_video_thumbnail(&file_path)
+            .or_else(|| generate_video_thumbnail(&file_path))
+        {
             Some(thumb) => (thumb, true),
             None => {
-                let info = format!("{}\n\nNo thumbnail.\nPress Shift+T to generate.", file_path.file_name().unwrap_or_default().to_string_lossy());
+                let info = format!("{}\n\nFailed to generate thumbnail", file_path.file_name().unwrap_or_default().to_string_lossy());
                 let placeholder = Paragraph::new(info)
                     .block(block)
                     .alignment(Alignment::Center);

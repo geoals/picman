@@ -139,27 +139,83 @@ enum KeyAction {
 fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
     // Handle filter dialog if active
     if state.filter_dialog.is_some() {
+        use super::state::FilterDialogFocus;
+        let focus = state.filter_dialog_focus();
+
         match code {
-            KeyCode::Esc => state.close_filter_dialog(),
-            KeyCode::Enter => {
-                if state.filter_dialog_enter()? {
-                    state.apply_filter()?;
+            KeyCode::Esc | KeyCode::Char('m') => {
+                // Apply filter when closing
+                state.apply_filter()?;
+            }
+            KeyCode::Tab => state.filter_dialog_focus_down(),
+            KeyCode::BackTab => state.filter_dialog_focus_up(),
+            KeyCode::Up => {
+                if focus == Some(FilterDialogFocus::Tag) {
+                    state.filter_dialog_up();
+                } else {
+                    state.filter_dialog_focus_up();
                 }
             }
-            KeyCode::Tab => state.filter_dialog_toggle_focus(),
-            KeyCode::Up => state.filter_dialog_up(),
-            KeyCode::Down => state.filter_dialog_down(),
+            KeyCode::Down => {
+                if focus == Some(FilterDialogFocus::Tag) {
+                    state.filter_dialog_down();
+                } else {
+                    state.filter_dialog_focus_down();
+                }
+            }
             KeyCode::Left => state.filter_dialog_left(),
             KeyCode::Right => state.filter_dialog_right(),
-            KeyCode::Backspace => state.filter_dialog_backspace(),
-            KeyCode::Char('0') => state.clear_filter()?,
-            KeyCode::Char('1') | KeyCode::Char('a') => state.filter_dialog_set_rating(1),
-            KeyCode::Char('2') | KeyCode::Char('s') => state.filter_dialog_set_rating(2),
-            KeyCode::Char('3') | KeyCode::Char('d') => state.filter_dialog_set_rating(3),
-            KeyCode::Char('4') | KeyCode::Char('f') => state.filter_dialog_set_rating(4),
-            KeyCode::Char('5') | KeyCode::Char('g') => state.filter_dialog_set_rating(5),
-            KeyCode::Char('v') => state.filter_dialog_toggle_video(),
-            KeyCode::Char(c) => state.filter_dialog_char(c),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                match focus {
+                    Some(FilterDialogFocus::VideoOnly) => {
+                        state.filter_dialog_toggle_video();
+                        state.auto_apply_filter()?;
+                    }
+                    Some(FilterDialogFocus::Tag) => {
+                        state.filter_dialog_add_tag();
+                        state.auto_apply_filter()?;
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Backspace => {
+                state.filter_dialog_backspace();
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('0') => {
+                state.clear_filter()?;
+            }
+            KeyCode::Char('1') | KeyCode::Char('a') => {
+                state.filter_dialog_set_rating(1);
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('2') | KeyCode::Char('s') => {
+                state.filter_dialog_set_rating(2);
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('3') | KeyCode::Char('d') => {
+                state.filter_dialog_set_rating(3);
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('4') | KeyCode::Char('f') => {
+                state.filter_dialog_set_rating(4);
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('5') | KeyCode::Char('g') => {
+                state.filter_dialog_set_rating(5);
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('v') => {
+                state.filter_dialog_toggle_video();
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char('u') => {
+                state.filter_dialog_set_unrated();
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Char(c) => {
+                state.filter_dialog_char(c);
+            }
             _ => {}
         }
         return Ok(KeyAction::Continue);
@@ -174,6 +230,28 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
             KeyCode::Up => state.tag_input_up(),
             KeyCode::Down => state.tag_input_down(),
             KeyCode::Char(c) => state.tag_input_char(c),
+            _ => {}
+        }
+        return Ok(KeyAction::Continue);
+    }
+
+    // Handle rename dialog if active
+    if let Some(ref mut dialog) = state.rename_dialog {
+        const VISIBLE_SUGGESTIONS: usize = 8;
+        match code {
+            KeyCode::Esc => state.close_rename_dialog(),
+            KeyCode::Enter => state.apply_rename()?,
+            KeyCode::Backspace => dialog.backspace(),
+            KeyCode::Delete => dialog.delete(),
+            KeyCode::Left => dialog.move_cursor_left(),
+            KeyCode::Right => dialog.move_cursor_right(),
+            KeyCode::Home => dialog.move_cursor_home(),
+            KeyCode::End => dialog.move_cursor_end(),
+            KeyCode::Up => dialog.select_prev_suggestion(VISIBLE_SUGGESTIONS),
+            KeyCode::Down => dialog.select_next_suggestion(VISIBLE_SUGGESTIONS),
+            KeyCode::Tab => dialog.use_suggestion(),
+            KeyCode::BackTab => dialog.append_suggestion(),
+            KeyCode::Char(c) => dialog.insert_char(c),
             _ => {}
         }
         return Ok(KeyAction::Continue);
@@ -228,6 +306,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('5') | KeyCode::Char('g') => state.set_rating(Some(5))?,
         KeyCode::Char('0') => state.set_rating(None)?,
         KeyCode::Char('t') => state.open_tag_input()?,
+        KeyCode::Char('r') => state.open_rename_dialog()?,
         KeyCode::Char('o') => state.open_operations_menu(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
         KeyCode::Char('p') => state.run_operation(crate::tui::state::OperationType::DirPreview),

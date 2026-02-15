@@ -41,17 +41,26 @@ fn detect_orientation(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
+/// Rating filter options
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RatingFilter {
+    #[default]
+    Any,              // No rating filter
+    Unrated,          // Only unrated items
+    MinRating(i32),   // Minimum rating (1-5)
+}
+
 /// Active filter criteria for filtering directories and files
 #[derive(Clone, Default)]
 pub struct FilterCriteria {
-    pub min_rating: Option<i32>,  // None = any rating (including unrated)
+    pub rating: RatingFilter,
     pub tags: Vec<String>,        // Empty = any tags, multiple = AND logic
     pub video_only: bool,         // If true, only show video files
 }
 
 impl FilterCriteria {
     pub fn is_active(&self) -> bool {
-        self.min_rating.is_some() || !self.tags.is_empty() || self.video_only
+        self.rating != RatingFilter::Any || !self.tags.is_empty() || self.video_only
     }
 }
 
@@ -59,13 +68,234 @@ impl FilterCriteria {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterDialogFocus {
     Rating,
+    VideoOnly,
     Tag,
+}
+
+/// State for the rename dialog popup
+pub struct RenameDialogState {
+    pub dir_id: i64,
+    pub original_path: String,
+    pub new_name: String,
+    pub cursor_pos: usize,
+    pub suggested_words: Vec<String>,
+    pub selected_suggestion: usize,
+    pub scroll_offset: usize,
+}
+
+impl RenameDialogState {
+    pub fn new(dir_id: i64, original_path: String, suggested_words: Vec<String>) -> Self {
+        // Extract just the directory name from the path
+        let name = original_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&original_path)
+            .to_string();
+        let cursor_pos = name.len();
+        Self {
+            dir_id,
+            original_path,
+            new_name: name,
+            cursor_pos,
+            suggested_words,
+            selected_suggestion: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.new_name.insert(self.cursor_pos, c);
+        self.cursor_pos += c.len_utf8();
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor_pos > 0 {
+            // Find the previous character boundary
+            let mut new_pos = self.cursor_pos - 1;
+            while new_pos > 0 && !self.new_name.is_char_boundary(new_pos) {
+                new_pos -= 1;
+            }
+            self.new_name.remove(new_pos);
+            self.cursor_pos = new_pos;
+        }
+    }
+
+    pub fn delete(&mut self) {
+        if self.cursor_pos < self.new_name.len() {
+            self.new_name.remove(self.cursor_pos);
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            let mut new_pos = self.cursor_pos - 1;
+            while new_pos > 0 && !self.new_name.is_char_boundary(new_pos) {
+                new_pos -= 1;
+            }
+            self.cursor_pos = new_pos;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if self.cursor_pos < self.new_name.len() {
+            let mut new_pos = self.cursor_pos + 1;
+            while new_pos < self.new_name.len() && !self.new_name.is_char_boundary(new_pos) {
+                new_pos += 1;
+            }
+            self.cursor_pos = new_pos;
+        }
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        self.cursor_pos = self.new_name.len();
+    }
+
+    pub fn select_prev_suggestion(&mut self, visible_count: usize) {
+        if !self.suggested_words.is_empty() {
+            if self.selected_suggestion > 0 {
+                self.selected_suggestion -= 1;
+            } else {
+                self.selected_suggestion = self.suggested_words.len() - 1;
+            }
+            self.adjust_scroll(visible_count);
+        }
+    }
+
+    pub fn select_next_suggestion(&mut self, visible_count: usize) {
+        if !self.suggested_words.is_empty() {
+            if self.selected_suggestion < self.suggested_words.len() - 1 {
+                self.selected_suggestion += 1;
+            } else {
+                self.selected_suggestion = 0;
+            }
+            self.adjust_scroll(visible_count);
+        }
+    }
+
+    fn adjust_scroll(&mut self, visible_count: usize) {
+        if visible_count == 0 {
+            return;
+        }
+        // Scroll up if selection is above visible area
+        if self.selected_suggestion < self.scroll_offset {
+            self.scroll_offset = self.selected_suggestion;
+        }
+        // Scroll down if selection is below visible area
+        if self.selected_suggestion >= self.scroll_offset + visible_count {
+            self.scroll_offset = self.selected_suggestion - visible_count + 1;
+        }
+    }
+
+    pub fn use_suggestion(&mut self) {
+        if let Some(word) = self.suggested_words.get(self.selected_suggestion) {
+            self.new_name = word.clone();
+            self.cursor_pos = self.new_name.len();
+        }
+    }
+
+    pub fn append_suggestion(&mut self) {
+        if let Some(word) = self.suggested_words.get(self.selected_suggestion) {
+            self.new_name.push_str(word);
+            self.cursor_pos = self.new_name.len();
+        }
+    }
+}
+
+/// Extract meaningful words from a directory path for rename suggestions
+pub fn extract_suggested_words(path: &str, file_tags: &[String]) -> Vec<String> {
+    use std::collections::HashMap;
+
+    let mut word_counts: HashMap<String, usize> = HashMap::new();
+
+    // Delimiters for splitting
+    let delimiters = [' ', '-', '_', '@', '(', ')', '[', ']', '{', '}',
+                      '【', '】', '「', '」', '『', '』', '/', '\\', '&', '+'];
+
+    // Noise words to filter out
+    let noise: std::collections::HashSet<&str> = [
+        "no", "vol", "p", "v", "gb", "mb", "kb", "pic", "video", "gif",
+        "cosplay", "coser", "ver", "version", "normal", "bonus", "set",
+        "part", "作品", "月", "年", "订阅", "特典", "合集",
+    ].iter().copied().collect();
+
+    // Process path segments
+    for segment in path.split('/') {
+        let mut current_word = String::new();
+
+        for c in segment.chars() {
+            if delimiters.contains(&c) {
+                if !current_word.is_empty() {
+                    process_word(&current_word, &noise, &mut word_counts);
+                    current_word.clear();
+                }
+            } else {
+                current_word.push(c);
+            }
+        }
+
+        if !current_word.is_empty() {
+            process_word(&current_word, &noise, &mut word_counts);
+        }
+    }
+
+    // Add file tags with high weight
+    for tag in file_tags {
+        *word_counts.entry(tag.clone()).or_insert(0) += 3;
+    }
+
+    // Sort by frequency, then alphabetically
+    let mut words: Vec<(String, usize)> = word_counts.into_iter().collect();
+    words.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    words.into_iter().map(|(w, _)| w).take(30).collect()
+}
+
+fn process_word(
+    word: &str,
+    noise: &std::collections::HashSet<&str>,
+    counts: &mut std::collections::HashMap<String, usize>
+) {
+    let trimmed = word.trim();
+    let lower = trimmed.to_lowercase();
+
+    // Skip if too short
+    if trimmed.len() < 2 {
+        return;
+    }
+
+    // Skip if noise word
+    if noise.contains(lower.as_str()) {
+        return;
+    }
+
+    // Skip if purely numeric
+    if trimmed.chars().all(|c| c.is_ascii_digit()) {
+        return;
+    }
+
+    // Skip if looks like file size (e.g., "1.37GB", "350MB")
+    if trimmed.ends_with("GB") || trimmed.ends_with("MB") || trimmed.ends_with("KB") {
+        return;
+    }
+
+    // Skip patterns like "73P1V" or "45P"
+    if trimmed.chars().any(|c| c.is_ascii_digit())
+       && (trimmed.contains('P') || trimmed.contains('V'))
+       && trimmed.len() < 10 {
+        return;
+    }
+
+    *counts.entry(trimmed.to_string()).or_insert(0) += 1;
 }
 
 /// State for the filter dialog popup
 pub struct FilterDialogState {
     pub all_tags: Vec<String>,
-    pub rating_selected: Option<i32>,  // 1-5 or None for "any"
+    pub rating_filter: RatingFilter,
     pub selected_tags: Vec<String>,    // Tags already added to filter
     pub tag_input: String,             // Current text input for adding new tag
     pub filtered_tags: Vec<String>,    // Autocomplete suggestions
@@ -79,7 +309,7 @@ impl FilterDialogState {
         let filtered_tags = all_tags.clone();
         Self {
             all_tags,
-            rating_selected: current_filter.min_rating,
+            rating_filter: current_filter.rating,
             selected_tags: current_filter.tags.clone(),
             tag_input: String::new(),
             filtered_tags,
@@ -129,7 +359,7 @@ impl FilterDialogState {
 
     pub fn to_criteria(&self) -> FilterCriteria {
         FilterCriteria {
-            min_rating: self.rating_selected,
+            rating: self.rating_filter,
             tags: self.selected_tags.clone(),
             video_only: self.video_only,
         }
@@ -405,6 +635,7 @@ pub struct AppState {
     pub directory_preview_cache: RefCell<Option<DirectoryPreviewCache>>,
     pub tag_input: Option<TagInputState>,
     pub filter_dialog: Option<FilterDialogState>,
+    pub rename_dialog: Option<RenameDialogState>,
     pub filter: FilterCriteria,
     /// Directory IDs that match the current filter (includes ancestors for tree structure)
     pub matching_dir_ids: HashSet<i64>,
@@ -432,6 +663,7 @@ impl AppState {
             directory_preview_cache: RefCell::new(None),
             tag_input: None,
             filter_dialog: None,
+            rename_dialog: None,
             filter: FilterCriteria::default(),
             matching_dir_ids: HashSet::new(),
             operations_menu: None,
@@ -465,10 +697,18 @@ impl AppState {
                         }
                     }
                     // Check rating filter
-                    if let Some(min_rating) = self.filter.min_rating {
-                        match file.rating {
-                            Some(r) if r >= min_rating => {}
-                            _ => continue,
+                    match self.filter.rating {
+                        RatingFilter::Any => {}
+                        RatingFilter::Unrated => {
+                            if file.rating.is_some() {
+                                continue;
+                            }
+                        }
+                        RatingFilter::MinRating(min) => {
+                            match file.rating {
+                                Some(r) if r >= min => {}
+                                _ => continue,
+                            }
                         }
                     }
                     // Check tag filter (AND logic)
@@ -793,6 +1033,9 @@ impl AppState {
             self.update_matching_directories()?;
         }
         self.filter_dialog = None;
+        // Invalidate preview cache to force full redraw (fixes dialog remnants)
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
         // Reload files with filter applied
         self.load_files_for_selected_directory()?;
         Ok(())
@@ -803,7 +1046,7 @@ impl AppState {
         self.filter = FilterCriteria::default();
         self.matching_dir_ids.clear();
         if let Some(ref mut dialog) = self.filter_dialog {
-            dialog.rating_selected = None;
+            dialog.rating_filter = RatingFilter::Any;
             dialog.selected_tags.clear();
             dialog.video_only = false;
             dialog.update_tag_filter();
@@ -820,7 +1063,7 @@ impl AppState {
             let current_dir_id = self.get_selected_directory().map(|d| d.id);
 
             self.matching_dir_ids = self.db.get_directories_with_matching_files(
-                self.filter.min_rating,
+                self.filter.rating,
                 &self.filter.tags,
                 self.filter.video_only,
             )?;
@@ -841,7 +1084,14 @@ impl AppState {
 
     /// Get visible directories considering the current filter
     pub fn get_visible_directories(&self) -> Vec<&Directory> {
-        self.tree.visible_directories_filtered(&self.matching_dir_ids)
+        let mut dirs = self.tree.visible_directories_filtered(&self.matching_dir_ids);
+
+        // When Unrated filter is active, also hide directories that have a rating
+        if self.filter.rating == RatingFilter::Unrated {
+            dirs.retain(|d| d.rating.is_none());
+        }
+
+        dirs
     }
 
     /// Get the currently selected directory considering the filter
@@ -896,46 +1146,66 @@ impl AppState {
     }
 
     /// Navigate rating left in filter dialog
+    /// Navigate rating left in filter dialog (order: Any <- Unrated <- 1 <- 2 <- 3 <- 4 <- 5)
     pub fn filter_dialog_left(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
             if dialog.focus == FilterDialogFocus::Rating {
-                dialog.rating_selected = match dialog.rating_selected {
-                    None => Some(5),
-                    Some(1) => None,
-                    Some(n) => Some(n - 1),
+                dialog.rating_filter = match dialog.rating_filter {
+                    RatingFilter::Any => RatingFilter::MinRating(5),
+                    RatingFilter::Unrated => RatingFilter::Any,
+                    RatingFilter::MinRating(1) => RatingFilter::Unrated,
+                    RatingFilter::MinRating(n) => RatingFilter::MinRating(n - 1),
                 };
             }
         }
     }
 
-    /// Navigate rating right in filter dialog
+    /// Navigate rating right in filter dialog (order: Any -> Unrated -> 1 -> 2 -> 3 -> 4 -> 5)
     pub fn filter_dialog_right(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
             if dialog.focus == FilterDialogFocus::Rating {
-                dialog.rating_selected = match dialog.rating_selected {
-                    None => Some(1),
-                    Some(5) => None,
-                    Some(n) => Some(n + 1),
+                dialog.rating_filter = match dialog.rating_filter {
+                    RatingFilter::Any => RatingFilter::Unrated,
+                    RatingFilter::Unrated => RatingFilter::MinRating(1),
+                    RatingFilter::MinRating(5) => RatingFilter::Any,
+                    RatingFilter::MinRating(n) => RatingFilter::MinRating(n + 1),
                 };
             }
         }
     }
 
-    /// Toggle focus in filter dialog
-    pub fn filter_dialog_toggle_focus(&mut self) {
+    /// Move focus down in filter dialog
+    pub fn filter_dialog_focus_down(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
             dialog.focus = match dialog.focus {
-                FilterDialogFocus::Rating => FilterDialogFocus::Tag,
+                FilterDialogFocus::Rating => FilterDialogFocus::VideoOnly,
+                FilterDialogFocus::VideoOnly => FilterDialogFocus::Tag,
                 FilterDialogFocus::Tag => FilterDialogFocus::Rating,
             };
         }
+    }
+
+    /// Move focus up in filter dialog
+    pub fn filter_dialog_focus_up(&mut self) {
+        if let Some(ref mut dialog) = self.filter_dialog {
+            dialog.focus = match dialog.focus {
+                FilterDialogFocus::Rating => FilterDialogFocus::Tag,
+                FilterDialogFocus::VideoOnly => FilterDialogFocus::Rating,
+                FilterDialogFocus::Tag => FilterDialogFocus::VideoOnly,
+            };
+        }
+    }
+
+    /// Get current focus in filter dialog
+    pub fn filter_dialog_focus(&self) -> Option<FilterDialogFocus> {
+        self.filter_dialog.as_ref().map(|d| d.focus)
     }
 
     /// Set rating directly in filter dialog (1-5)
     pub fn filter_dialog_set_rating(&mut self, rating: i32) {
         if let Some(ref mut dialog) = self.filter_dialog {
             if dialog.focus == FilterDialogFocus::Rating {
-                dialog.rating_selected = Some(rating);
+                dialog.rating_filter = RatingFilter::MinRating(rating);
             }
         }
     }
@@ -947,8 +1217,17 @@ impl AppState {
         }
     }
 
-    /// Add selected tag to filter (or apply if in rating focus)
-    pub fn filter_dialog_enter(&mut self) -> Result<bool> {
+    /// Set unrated filter in dialog
+    pub fn filter_dialog_set_unrated(&mut self) {
+        if let Some(ref mut dialog) = self.filter_dialog {
+            if dialog.focus == FilterDialogFocus::Rating {
+                dialog.rating_filter = RatingFilter::Unrated;
+            }
+        }
+    }
+
+    /// Add selected tag to filter
+    pub fn filter_dialog_add_tag(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
             if dialog.focus == FilterDialogFocus::Tag {
                 // Add selected tag from autocomplete, or input text
@@ -967,13 +1246,128 @@ impl AppState {
                     }
                     dialog.tag_input.clear();
                     dialog.update_tag_filter();
-                    return Ok(false); // Don't close dialog
                 }
             }
-            // Apply filter and close
-            return Ok(true);
         }
-        Ok(false)
+    }
+
+    /// Auto-apply filter changes without closing the dialog
+    pub fn auto_apply_filter(&mut self) -> Result<()> {
+        if let Some(ref dialog) = self.filter_dialog {
+            self.filter = dialog.to_criteria();
+            self.update_matching_directories()?;
+        }
+        // Reload files with filter applied
+        self.load_files_for_selected_directory()?;
+        Ok(())
+    }
+
+    // ==================== Rename Dialog Methods ====================
+
+    /// Open the rename dialog for the selected directory
+    pub fn open_rename_dialog(&mut self) -> Result<()> {
+        if self.focus != Focus::DirectoryTree {
+            return Ok(());
+        }
+
+        if let Some(dir) = self.get_selected_directory().cloned() {
+            // Collect all descendant directory IDs
+            let mut dir_ids = vec![dir.id];
+            self.collect_descendant_dir_ids(dir.id, &mut dir_ids);
+
+            // Build a combined path string from all subdirectory names
+            let mut all_paths = String::new();
+            for d in &self.tree.directories {
+                if dir_ids.contains(&d.id) {
+                    all_paths.push_str(&d.path);
+                    all_paths.push('/');
+                }
+            }
+
+            // Collect tags from files in all these directories
+            let mut file_tags: Vec<String> = Vec::new();
+            for did in &dir_ids {
+                if let Ok(files) = self.db.get_files_in_directory(*did) {
+                    for f in &files {
+                        if let Ok(tags) = self.db.get_file_tags(f.id) {
+                            file_tags.extend(tags);
+                        }
+                    }
+                }
+            }
+
+            let suggested_words = extract_suggested_words(&all_paths, &file_tags);
+            self.rename_dialog = Some(RenameDialogState::new(dir.id, dir.path.clone(), suggested_words));
+        }
+        Ok(())
+    }
+
+    /// Close the rename dialog without applying
+    pub fn close_rename_dialog(&mut self) {
+        self.rename_dialog = None;
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
+    }
+
+    /// Apply the rename and close the dialog
+    pub fn apply_rename(&mut self) -> Result<()> {
+        let (dir_id, old_path, new_name) = if let Some(ref dialog) = self.rename_dialog {
+            let new_name = dialog.new_name.trim().to_string();
+            if new_name.is_empty() {
+                self.rename_dialog = None;
+                return Ok(());
+            }
+            (dialog.dir_id, dialog.original_path.clone(), new_name)
+        } else {
+            return Ok(());
+        };
+
+        // Build new path: replace the last component
+        let new_path = if let Some(parent) = old_path.rsplit_once('/') {
+            format!("{}/{}", parent.0, new_name)
+        } else {
+            new_name.clone()
+        };
+
+        // Don't rename if nothing changed
+        if old_path == new_path {
+            self.rename_dialog = None;
+            return Ok(());
+        }
+
+        // Perform filesystem rename
+        let old_fs_path = self.library_path.join(&old_path);
+        let new_fs_path = self.library_path.join(&new_path);
+
+        if new_fs_path.exists() {
+            self.status_message = Some(format!("Error: '{}' already exists", new_name));
+            self.rename_dialog = None;
+            return Ok(());
+        }
+
+        std::fs::rename(&old_fs_path, &new_fs_path)?;
+
+        // Update database: this directory and all descendants
+        self.db.rename_directory(dir_id, &old_path, &new_path)?;
+
+        // Update in-memory state
+        for dir in &mut self.tree.directories {
+            if dir.id == dir_id {
+                dir.path = new_path.clone();
+            } else if dir.path.starts_with(&format!("{}/", old_path)) {
+                dir.path = dir.path.replacen(&old_path, &new_path, 1);
+            }
+        }
+
+        self.status_message = Some(format!("Renamed to '{}'", new_name));
+        self.rename_dialog = None;
+
+        // Invalidate caches
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
+
+        Ok(())
     }
 
     // ==================== Operations Menu Methods ====================

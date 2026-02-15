@@ -7,7 +7,7 @@ use ratatui::{
 use super::state::AppState;
 use super::widgets::{
     render_details_panel, render_directory_tree, render_file_list, render_filter_dialog,
-    render_preview, render_status_bar, render_tag_popup,
+    render_preview, render_rename_dialog, render_status_bar, render_tag_popup,
 };
 
 /// Main render function
@@ -72,6 +72,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         render_filter_dialog(frame, size, filter_dialog);
     }
 
+    // Render rename dialog if active
+    if let Some(ref rename_dialog) = state.rename_dialog {
+        render_rename_dialog(frame, size, rename_dialog);
+    }
+
     // Render operations menu if active
     if let Some(ref menu) = state.operations_menu {
         render_operations_menu(frame, size, menu);
@@ -133,9 +138,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     1-5/asdfg Set rating
     0        Clear rating
     t        Add tag
+    r        Rename directory
     o        Operations menu
     m        Filter
-    p        Play video (mpv)
+    p        Dir preview (P=recursive)
     ?        Toggle help
     q        Quit
 "#;
