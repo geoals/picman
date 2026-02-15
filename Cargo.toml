@@ -25,6 +25,7 @@ image = "0.25"
 
 # Fast image dimension reading
 imagesize = "0.13"
+kamadak-exif = "0.5"
 
 # Error handling
 anyhow = "1"

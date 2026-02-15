@@ -7,6 +7,28 @@ use ratatui::{
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
+    use std::sync::atomic::Ordering;
+
+    // Show thumbnail generation progress if active
+    if let Some(ref progress) = state.thumbnail_progress {
+        let completed = progress.completed.load(Ordering::Relaxed);
+        let total = progress.total;
+        let pct = if total > 0 { completed * 100 / total } else { 0 };
+        let msg = format!("Generating thumbnails: {}/{} ({}%)", completed, total, pct);
+        let status = Paragraph::new(msg)
+            .style(Style::default().bg(Color::Magenta).fg(Color::White));
+        frame.render_widget(status, area);
+        return;
+    }
+
+    // Show status message if present
+    if let Some(ref msg) = state.status_message {
+        let status = Paragraph::new(msg.as_str())
+            .style(Style::default().bg(Color::Blue).fg(Color::White));
+        frame.render_widget(status, area);
+        return;
+    }
+
     let mut parts = Vec::new();
 
     // Current focus indicator

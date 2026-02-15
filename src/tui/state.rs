@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::widgets::{ListState, TableState};
@@ -301,6 +303,19 @@ impl FileListState {
     }
 }
 
+/// State for thumbnail generation confirmation dialog
+pub struct ThumbnailConfirmState {
+    pub directory_path: String,
+    pub file_count: usize,
+}
+
+/// Progress tracker for background thumbnail generation
+pub struct ThumbnailProgress {
+    pub total: usize,
+    pub completed: Arc<AtomicUsize>,
+    pub done: Arc<AtomicBool>,
+}
+
 /// Main application state
 pub struct AppState {
     pub library_path: PathBuf,
@@ -315,6 +330,12 @@ pub struct AppState {
     pub filter: FilterCriteria,
     /// Directory IDs that match the current filter (includes ancestors for tree structure)
     pub matching_dir_ids: HashSet<i64>,
+    /// Confirmation dialog for directory thumbnail generation
+    pub thumbnail_confirm: Option<ThumbnailConfirmState>,
+    /// Status message to show temporarily
+    pub status_message: Option<String>,
+    /// Background thumbnail generation progress
+    pub thumbnail_progress: Option<ThumbnailProgress>,
 }
 
 impl AppState {
@@ -334,6 +355,9 @@ impl AppState {
             filter_dialog: None,
             filter: FilterCriteria::default(),
             matching_dir_ids: HashSet::new(),
+            thumbnail_confirm: None,
+            status_message: None,
+            thumbnail_progress: None,
         };
 
         // Load files for initial selection
@@ -871,5 +895,128 @@ impl AppState {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // ==================== Thumbnail Methods ====================
+
+    /// Handle Shift+T: generate thumbnail for file or show confirm for directory
+    pub fn trigger_thumbnail_generation(&mut self) {
+        use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
+
+        match self.focus {
+            Focus::FileList => {
+                // Generate thumbnail for selected file
+                if let Some(path) = self.selected_file_path() {
+                    if is_image_file(&path) {
+                        if generate_image_thumbnail(&path).is_some() {
+                            self.status_message = Some("Thumbnail generated".to_string());
+                            // Clear preview cache to reload
+                            *self.preview_cache.borrow_mut() = None;
+                        } else {
+                            self.status_message = Some("Failed to generate thumbnail".to_string());
+                        }
+                    } else if is_video_file(&path) {
+                        if generate_video_thumbnail(&path).is_some() {
+                            self.status_message = Some("Thumbnail generated".to_string());
+                            *self.preview_cache.borrow_mut() = None;
+                        } else {
+                            self.status_message = Some("Failed to generate thumbnail".to_string());
+                        }
+                    }
+                }
+            }
+            Focus::DirectoryTree => {
+                // Show confirmation dialog for directory
+                if let Some(dir) = self.get_selected_directory() {
+                    let file_count = self.file_list.files.len();
+                    self.thumbnail_confirm = Some(ThumbnailConfirmState {
+                        directory_path: dir.path.clone(),
+                        file_count,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Confirm and generate thumbnails for all files in current directory
+    pub fn confirm_thumbnail_generation(&mut self) {
+        use crate::tui::widgets::{is_image_file, is_video_file};
+
+        self.thumbnail_confirm = None;
+
+        // Collect paths first (need owned data for parallel processing)
+        let dir_path = self.get_selected_directory().map(|d| d.path.clone());
+        let paths: Vec<PathBuf> = self.file_list.files.iter()
+            .filter_map(|file_with_tags| {
+                let dir = dir_path.as_ref()?;
+                let path = if dir.is_empty() {
+                    self.library_path.join(&file_with_tags.file.filename)
+                } else {
+                    self.library_path.join(dir).join(&file_with_tags.file.filename)
+                };
+                // Only include image/video files
+                if is_image_file(&path) || is_video_file(&path) {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let total = paths.len();
+        if total == 0 {
+            self.status_message = Some("No media files to process".to_string());
+            return;
+        }
+
+        // Set up progress tracking
+        let completed = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+
+        self.thumbnail_progress = Some(ThumbnailProgress {
+            total,
+            completed: Arc::clone(&completed),
+            done: Arc::clone(&done),
+        });
+
+        // Spawn background thread for parallel generation
+        std::thread::spawn(move || {
+            use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
+            use rayon::prelude::*;
+
+            paths.par_iter().for_each(|path| {
+                if is_image_file(path) {
+                    generate_image_thumbnail(path);
+                } else if is_video_file(path) {
+                    generate_video_thumbnail(path);
+                }
+                completed.fetch_add(1, Ordering::Relaxed);
+            });
+
+            done.store(true, Ordering::Relaxed);
+        });
+    }
+
+    /// Check and update thumbnail generation progress
+    pub fn update_thumbnail_progress(&mut self) {
+        if let Some(ref progress) = self.thumbnail_progress {
+            if progress.done.load(Ordering::Relaxed) {
+                let completed = progress.completed.load(Ordering::Relaxed);
+                self.status_message = Some(format!("Generated {} thumbnails", completed));
+                self.thumbnail_progress = None;
+                // Clear preview cache to reload
+                *self.preview_cache.borrow_mut() = None;
+            }
+        }
+    }
+
+    /// Cancel thumbnail generation dialog
+    pub fn cancel_thumbnail_generation(&mut self) {
+        self.thumbnail_confirm = None;
+    }
+
+    /// Clear status message
+    pub fn clear_status_message(&mut self) {
+        self.status_message = None;
     }
 }

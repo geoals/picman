@@ -1,3 +1,4 @@
+use image::DynamicImage;
 use ratatui::{
     layout::Rect,
     prelude::*,
@@ -5,6 +6,7 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, FilterType, Resize, StatefulImage};
 use std::collections::HashMap;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
@@ -14,11 +16,93 @@ use crate::tui::state::{AppState, PreviewCache};
 // Global picker (created once, thread-safe)
 static PICKER: OnceLock<Mutex<Option<Picker>>> = OnceLock::new();
 
-// Cache for video thumbnails (video path -> thumbnail path)
+// In-memory cache mapping original path -> thumbnail path
 static THUMBNAIL_CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+
+// Thumbnail settings
+const THUMBNAIL_MAX_HEIGHT: u32 = 1440;
+const THUMBNAIL_QUALITY: u8 = 80;
 
 fn get_thumbnail_cache() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
     THUMBNAIL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Get the thumbnail cache directory (~/.cache/picman/thumbnails)
+fn get_thumbnail_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let cache_dir = PathBuf::from(home).join(".cache/picman/thumbnails");
+    std::fs::create_dir_all(&cache_dir).ok()?;
+    Some(cache_dir)
+}
+
+/// Generate a thumbnail path for an image based on its path hash
+fn get_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let cache_dir = get_thumbnail_dir()?;
+    let mut hasher = DefaultHasher::new();
+    original_path.hash(&mut hasher);
+
+    // Include mtime in hash so thumbnails regenerate when file changes
+    let mtime = std::fs::metadata(original_path).ok()?.modified().ok()?;
+    mtime.hash(&mut hasher);
+
+    Some(cache_dir.join(format!("{:016x}.jpg", hasher.finish())))
+}
+
+/// Get cached thumbnail for an image file (does NOT generate)
+fn get_cached_image_thumbnail(image_path: &Path) -> Option<PathBuf> {
+    let mut cache = get_thumbnail_cache().lock().ok()?;
+
+    // Check in-memory cache first
+    if let Some(thumb_path) = cache.get(image_path) {
+        if thumb_path.exists() {
+            return Some(thumb_path.clone());
+        }
+    }
+
+    let thumb_path = get_thumbnail_path(image_path)?;
+
+    // If thumbnail exists on disk, use it
+    if thumb_path.exists() {
+        cache.insert(image_path.to_path_buf(), thumb_path.clone());
+        return Some(thumb_path);
+    }
+
+    None
+}
+
+/// Generate thumbnail for an image file
+pub fn generate_image_thumbnail(image_path: &Path) -> Option<PathBuf> {
+    let thumb_path = get_thumbnail_path(image_path)?;
+
+    // Generate thumbnail: load, apply EXIF, resize, save
+    let img = image::open(image_path).ok()?;
+    let img = apply_exif_orientation(image_path, img);
+
+    // Resize to max height, preserving aspect ratio
+    let img = if img.height() > THUMBNAIL_MAX_HEIGHT {
+        img.resize(
+            u32::MAX,
+            THUMBNAIL_MAX_HEIGHT,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        img
+    };
+
+    // Save as JPEG with specified quality
+    let mut output = std::fs::File::create(&thumb_path).ok()?;
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, THUMBNAIL_QUALITY);
+    img.to_rgb8().write_with_encoder(encoder).ok()?;
+
+    // Update in-memory cache
+    if let Ok(mut cache) = get_thumbnail_cache().lock() {
+        cache.insert(image_path.to_path_buf(), thumb_path.clone());
+    }
+
+    Some(thumb_path)
 }
 
 fn get_picker_mutex() -> &'static Mutex<Option<Picker>> {
@@ -30,7 +114,33 @@ fn get_picker_mutex() -> &'static Mutex<Option<Picker>> {
     })
 }
 
-fn is_image_file(path: &Path) -> bool {
+/// Read EXIF orientation and apply rotation/flip to image
+fn apply_exif_orientation(path: &Path, img: DynamicImage) -> DynamicImage {
+    let orientation = (|| {
+        let file = std::fs::File::open(path).ok()?;
+        let mut bufreader = BufReader::new(file);
+        let exif = exif::Reader::new().read_from_container(&mut bufreader).ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        if let exif::Value::Short(ref vals) = field.value {
+            vals.first().copied()
+        } else {
+            None
+        }
+    })();
+
+    match orientation {
+        Some(2) => img.fliph(),
+        Some(3) => img.rotate180(),
+        Some(4) => img.flipv(),
+        Some(5) => img.rotate90().fliph(),
+        Some(6) => img.rotate90(),
+        Some(7) => img.rotate270().fliph(),
+        Some(8) => img.rotate270(),
+        _ => img, // 1 or unknown = no transformation
+    }
+}
+
+pub fn is_image_file(path: &Path) -> bool {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -43,7 +153,7 @@ fn is_image_file(path: &Path) -> bool {
     )
 }
 
-fn is_video_file(path: &Path) -> bool {
+pub fn is_video_file(path: &Path) -> bool {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -56,42 +166,49 @@ fn is_video_file(path: &Path) -> bool {
     )
 }
 
-/// Extract a thumbnail from a video file using ffmpeg
-fn get_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
+/// Get video thumbnail path with "vid_" prefix
+fn get_video_thumbnail_path(video_path: &Path) -> Option<PathBuf> {
+    get_thumbnail_path(video_path)
+        .map(|p| p.with_file_name(format!("vid_{}", p.file_name().unwrap().to_string_lossy())))
+}
+
+/// Get cached thumbnail for a video file (does NOT generate)
+fn get_cached_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
     let mut cache = get_thumbnail_cache().lock().ok()?;
 
-    // Check cache first
+    // Check in-memory cache first
     if let Some(thumb_path) = cache.get(video_path) {
         if thumb_path.exists() {
             return Some(thumb_path.clone());
         }
     }
 
-    // Generate thumbnail path in temp directory
-    let hash = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        video_path.hash(&mut hasher);
-        hasher.finish()
-    };
-    let thumb_path = std::env::temp_dir().join(format!("picman_thumb_{}.jpg", hash));
+    let thumb_path = get_video_thumbnail_path(video_path)?;
 
-    // If thumbnail already exists, use it
+    // If thumbnail exists on disk, use it
     if thumb_path.exists() {
         cache.insert(video_path.to_path_buf(), thumb_path.clone());
         return Some(thumb_path);
     }
 
-    // Extract thumbnail using ffmpeg (grab frame at 1 second or first frame)
+    None
+}
+
+/// Generate thumbnail for a video file using ffmpeg
+pub fn generate_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
+    let thumb_path = get_video_thumbnail_path(video_path)?;
+
+    // Extract thumbnail using ffmpeg (grab frame at 1 second)
+    // Scale to max height while preserving aspect ratio
+    let scale_filter = format!("scale=-1:'min({},ih)'", THUMBNAIL_MAX_HEIGHT);
     let status = Command::new("ffmpeg")
         .args([
-            "-y",                    // Overwrite output
-            "-i",
-            video_path.to_str()?,
-            "-ss", "00:00:01",       // Seek to 1 second
-            "-vframes", "1",         // Extract 1 frame
-            "-q:v", "2",             // Quality
+            "-y",
+            "-i", video_path.to_str()?,
+            "-ss", "00:00:01",
+            "-vframes", "1",
+            "-vf", &scale_filter,
+            "-q:v", "5",
             thumb_path.to_str()?,
         ])
         .stdout(std::process::Stdio::null())
@@ -100,7 +217,9 @@ fn get_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
         .ok()?;
 
     if status.success() && thumb_path.exists() {
-        cache.insert(video_path.to_path_buf(), thumb_path.clone());
+        if let Ok(mut cache) = get_thumbnail_cache().lock() {
+            cache.insert(video_path.to_path_buf(), thumb_path.clone());
+        }
         Some(thumb_path)
     } else {
         None
@@ -125,14 +244,24 @@ pub fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    // Determine what to preview: image directly, video thumbnail, or nothing
+    // Determine what to preview: use cached thumbnail (no auto-generation)
     let preview_path = if is_image_file(&file_path) {
-        file_path.clone()
-    } else if is_video_file(&file_path) {
-        match get_video_thumbnail(&file_path) {
+        match get_cached_image_thumbnail(&file_path) {
             Some(thumb) => thumb,
             None => {
-                let info = format!("Video: {}\n\n(generating thumbnail...)", file_path.file_name().unwrap_or_default().to_string_lossy());
+                let info = format!("{}\n\nNo thumbnail.\nPress Shift+T to generate.", file_path.file_name().unwrap_or_default().to_string_lossy());
+                let placeholder = Paragraph::new(info)
+                    .block(block)
+                    .alignment(Alignment::Center);
+                frame.render_widget(placeholder, area);
+                return;
+            }
+        }
+    } else if is_video_file(&file_path) {
+        match get_cached_video_thumbnail(&file_path) {
+            Some(thumb) => thumb,
+            None => {
+                let info = format!("{}\n\nNo thumbnail.\nPress Shift+T to generate.", file_path.file_name().unwrap_or_default().to_string_lossy());
                 let placeholder = Paragraph::new(info)
                     .block(block)
                     .alignment(Alignment::Center);
@@ -183,7 +312,7 @@ pub fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         };
 
-        // Load the image (or video thumbnail)
+        // Load the thumbnail (EXIF orientation already applied during thumbnail generation)
         let image = match image::open(&preview_path) {
             Ok(img) => img,
             Err(_) => {

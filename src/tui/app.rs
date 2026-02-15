@@ -57,14 +57,26 @@ fn run_app(
     state: &mut AppState,
 ) -> Result<()> {
     loop {
+        // Check for thumbnail generation progress
+        state.update_thumbnail_progress();
+
         terminal.draw(|frame| render(frame, state))?;
 
-        // Wait for first event
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                match handle_key(key.code, state)? {
-                    KeyAction::Quit => return Ok(()),
-                    KeyAction::Continue => {}
+        // Use shorter timeout when background work is happening to update progress
+        let timeout = if state.thumbnail_progress.is_some() {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(1)
+        };
+
+        // Wait for event with timeout
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match handle_key(key.code, state)? {
+                        KeyAction::Quit => return Ok(()),
+                        KeyAction::Continue => {}
+                    }
                 }
             }
         }
@@ -132,6 +144,19 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         return Ok(KeyAction::Continue);
     }
 
+    // Handle thumbnail generation confirmation dialog
+    if state.thumbnail_confirm.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => state.confirm_thumbnail_generation(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => state.cancel_thumbnail_generation(),
+            _ => {}
+        }
+        return Ok(KeyAction::Continue);
+    }
+
+    // Clear status message on any key
+    state.clear_status_message();
+
     // Normal key handling
     match code {
         KeyCode::Char('q') => return Ok(KeyAction::Quit),
@@ -148,6 +173,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('5') | KeyCode::Char('g') => state.set_rating(Some(5))?,
         KeyCode::Char('0') => state.set_rating(None)?,
         KeyCode::Char('t') => state.open_tag_input()?,
+        KeyCode::Char('T') => state.trigger_thumbnail_generation(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}

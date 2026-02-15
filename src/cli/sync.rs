@@ -110,20 +110,35 @@ fn tag_orientation(db: &Database, library_path: &Path) -> Result<usize> {
     Ok(total_tagged)
 }
 
-/// Detect orientation from image dimensions
+/// Detect orientation from image dimensions, accounting for EXIF rotation
 /// Returns "landscape" if width > height, "portrait" if height > width, None if square or error
 fn detect_orientation(path: &Path) -> Option<&'static str> {
-    match imagesize::size(path) {
-        Ok(size) => {
-            if size.width > size.height {
-                Some("landscape")
-            } else if size.height > size.width {
-                Some("portrait")
-            } else {
-                None // Square
+    let size = imagesize::size(path).ok()?;
+    let (mut width, mut height) = (size.width, size.height);
+
+    // Check EXIF orientation - values 5-8 involve 90° rotation, swapping dimensions
+    if let Ok(file) = std::fs::File::open(path) {
+        let mut bufreader = std::io::BufReader::new(file);
+        if let Ok(exif) = exif::Reader::new().read_from_container(&mut bufreader) {
+            if let Some(orientation) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+                if let exif::Value::Short(ref vals) = orientation.value {
+                    if let Some(&val) = vals.first() {
+                        // Orientations 5-8 rotate 90°, swapping width/height
+                        if val >= 5 && val <= 8 {
+                            std::mem::swap(&mut width, &mut height);
+                        }
+                    }
+                }
             }
         }
-        Err(_) => None,
+    }
+
+    if width > height {
+        Some("landscape")
+    } else if height > width {
+        Some("portrait")
+    } else {
+        None // Square
     }
 }
 

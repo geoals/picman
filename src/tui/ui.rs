@@ -71,6 +71,34 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     if let Some(ref filter_dialog) = state.filter_dialog {
         render_filter_dialog(frame, size, filter_dialog);
     }
+
+    // Render thumbnail confirmation dialog if active
+    if let Some(ref confirm) = state.thumbnail_confirm {
+        render_thumbnail_confirm(frame, size, confirm);
+    }
+}
+
+fn render_thumbnail_confirm(frame: &mut Frame, area: Rect, confirm: &super::state::ThumbnailConfirmState) {
+    let text = format!(
+        "Generate thumbnails for {} files\nin directory '{}'?\n\n[Y]es  [N]o",
+        confirm.file_count,
+        if confirm.directory_path.is_empty() { "." } else { &confirm.directory_path }
+    );
+
+    let width = 45;
+    let height = 7;
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+
+    let dialog_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, dialog_area);
+
+    let dialog = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title(" Generate Thumbnails "))
+        .alignment(Alignment::Center);
+
+    frame.render_widget(dialog, dialog_area);
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
@@ -89,6 +117,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     1-5/asdfg Set rating
     0        Clear rating
     t        Add tag
+    T        Generate thumbnail(s)
     m        Filter
     p        Play video (mpv)
     ?        Toggle help
@@ -96,7 +125,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
 "#;
 
     let help_width = 40;
-    let help_height = 16;
+    let help_height = 17;
     let x = (area.width.saturating_sub(help_width)) / 2;
     let y = (area.height.saturating_sub(help_height)) / 2;
 
