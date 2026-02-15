@@ -148,12 +148,17 @@ fn render_tag_input(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
 
 fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
     let is_tag_focused = dialog.focus == FilterDialogFocus::Tag;
+    let visible_height = area.height.saturating_sub(1) as usize; // -1 for border
+
+    let total_tags = dialog.filtered_tags.len();
+    let scroll_offset = dialog.tag_scroll_offset;
 
     let items: Vec<ListItem> = dialog
         .filtered_tags
         .iter()
         .enumerate()
-        .take(area.height as usize)
+        .skip(scroll_offset)
+        .take(visible_height)
         .map(|(idx, tag)| {
             // Only highlight selection when tag section is focused
             let style = if is_tag_focused && idx == dialog.tag_list_index {
@@ -165,8 +170,22 @@ fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialog
         })
         .collect();
 
+    // Show scroll indicators if needed
+    let title = if total_tags > visible_height {
+        let at_top = scroll_offset == 0;
+        let at_bottom = scroll_offset + visible_height >= total_tags;
+        match (at_top, at_bottom) {
+            (true, false) => " ▼ ".to_string(),
+            (false, true) => " ▲ ".to_string(),
+            (false, false) => " ▲▼ ".to_string(),
+            (true, true) => String::new(),
+        }
+    } else {
+        String::new()
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::TOP));
+        .block(Block::default().borders(Borders::TOP).title(title));
     frame.render_widget(list, area);
 }
 

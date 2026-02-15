@@ -300,6 +300,7 @@ pub struct FilterDialogState {
     pub tag_input: String,             // Current text input for adding new tag
     pub filtered_tags: Vec<String>,    // Autocomplete suggestions
     pub tag_list_index: usize,
+    pub tag_scroll_offset: usize,      // Scroll offset for tag list
     pub focus: FilterDialogFocus,
     pub video_only: bool,              // Filter to show only videos
 }
@@ -314,6 +315,7 @@ impl FilterDialogState {
             tag_input: String::new(),
             filtered_tags,
             tag_list_index: 0,
+            tag_scroll_offset: 0,
             focus: FilterDialogFocus::Rating,
             video_only: current_filter.video_only,
         }
@@ -331,6 +333,7 @@ impl FilterDialogState {
             .cloned()
             .collect();
         self.tag_list_index = 0;
+        self.tag_scroll_offset = 0;
     }
 
     pub fn selected_autocomplete_tag(&self) -> Option<&String> {
@@ -343,6 +346,12 @@ impl FilterDialogState {
                 self.tag_list_index -= 1;
             } else {
                 self.tag_list_index = self.filtered_tags.len() - 1;
+                // Scroll to show the last item
+                self.tag_scroll_offset = self.filtered_tags.len().saturating_sub(5);
+            }
+            // Ensure selection is visible (scroll up if needed)
+            if self.tag_list_index < self.tag_scroll_offset {
+                self.tag_scroll_offset = self.tag_list_index;
             }
         }
     }
@@ -351,9 +360,28 @@ impl FilterDialogState {
         if !self.filtered_tags.is_empty() {
             if self.tag_list_index < self.filtered_tags.len() - 1 {
                 self.tag_list_index += 1;
+                // Scroll down if selection goes below visible area (assume ~5 visible items)
+                let visible_height = 5;
+                if self.tag_list_index >= self.tag_scroll_offset + visible_height {
+                    self.tag_scroll_offset = self.tag_list_index - visible_height + 1;
+                }
             } else {
                 self.tag_list_index = 0;
+                self.tag_scroll_offset = 0;
             }
+        }
+    }
+
+    /// Adjust scroll offset to keep selection visible within given height
+    pub fn adjust_tag_scroll(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        // Ensure selection is visible
+        if self.tag_list_index < self.tag_scroll_offset {
+            self.tag_scroll_offset = self.tag_list_index;
+        } else if self.tag_list_index >= self.tag_scroll_offset + visible_height {
+            self.tag_scroll_offset = self.tag_list_index - visible_height + 1;
         }
     }
 
