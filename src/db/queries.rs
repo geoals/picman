@@ -712,45 +712,43 @@ impl Database {
             matching_dir_ids.extend(dir_ids.iter());
         }
 
-        // === Part 2: Find directories with matching DIRECTORY TAGS ===
-        // (Only applies when tag filter is active and not video_only)
-        let mut dirs_with_matching_tags: Vec<i64> = Vec::new();
-        if !tags.is_empty() && !video_only {
-            let tag_placeholders = (0..tags.len())
-                .map(|i| format!("?{}", i + 1))
-                .collect::<Vec<_>>()
-                .join(",");
+        // === Part 2: Find directories that match the DIRECTORY-LEVEL filter ===
+        // A directory matches if it has matching tags AND rating (when both filters active)
+        let all_dirs = self.get_all_directories()?;
+        let mut dirs_matching_full_filter: Vec<i64> = Vec::new();
 
-            let dir_tag_query = format!(
-                "SELECT DISTINCT d.id FROM directories d
-                 WHERE (SELECT COUNT(DISTINCT t.name) FROM directory_tags dt
-                        JOIN tags t ON dt.tag_id = t.id
-                        WHERE dt.directory_id = d.id AND t.name IN ({})) = ?{}",
-                tag_placeholders,
-                tags.len() + 1
-            );
+        if !video_only {
+            for dir in &all_dirs {
+                // Check rating filter on directory
+                let dir_matches_rating = match rating_filter {
+                    RatingFilter::Any => true,
+                    RatingFilter::Unrated => dir.rating.is_none(),
+                    RatingFilter::MinRating(min) => dir.rating.map(|r| r >= min).unwrap_or(false),
+                };
 
-            let mut stmt = self.connection().prepare(&dir_tag_query)?;
+                // Check tag filter on directory
+                let dir_matches_tags = if tags.is_empty() {
+                    true
+                } else {
+                    let dir_tags = self.get_directory_tags(dir.id)?;
+                    tags.iter().all(|t| dir_tags.contains(t))
+                };
 
-            let mut params: Vec<rusqlite::types::Value> = Vec::new();
-            params.extend(tags.iter().map(|t| t.clone().into()));
-            params.push((tags.len() as i64).into());
-
-            dirs_with_matching_tags = stmt
-                .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
-                .collect::<Result<Vec<_>, _>>()?;
-
-            matching_dir_ids.extend(dirs_with_matching_tags.iter());
+                // Directory matches if it passes both filters
+                if dir_matches_rating && dir_matches_tags {
+                    dirs_matching_full_filter.push(dir.id);
+                    matching_dir_ids.insert(dir.id);
+                }
+            }
         }
 
-        // === Part 3: Include ALL DESCENDANTS of directories that have matching tags ===
-        let all_dirs = self.get_all_directories()?;
-        for &tagged_dir_id in &dirs_with_matching_tags {
+        // === Part 3: Include ALL DESCENDANTS of directories that match the full filter ===
+        for &matching_dir_id in &dirs_matching_full_filter {
             // Find all directories that have this directory as an ancestor
             for dir in &all_dirs {
                 let mut current_id = dir.parent_id;
                 while let Some(pid) = current_id {
-                    if pid == tagged_dir_id {
+                    if pid == matching_dir_id {
                         matching_dir_ids.insert(dir.id);
                         break;
                     }
@@ -762,7 +760,6 @@ impl Database {
         }
 
         // === Part 4: Include ancestor directories to maintain tree structure ===
-        let all_dirs = self.get_all_directories()?;
         let mut ancestors_to_add: HashSet<i64> = HashSet::new();
 
         for &dir_id in &matching_dir_ids {

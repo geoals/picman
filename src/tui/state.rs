@@ -714,26 +714,22 @@ impl AppState {
         if let Some(dir) = self.get_selected_directory() {
             let files = self.db.get_files_in_directory(dir.id)?;
 
-            // Check if this directory or any ancestor has all the filter tags
-            // If so, show all files without checking individual file tags/ratings
-            let ancestor_has_all_filter_tags = if !self.filter.tags.is_empty() {
-                self.directory_or_ancestor_has_tags(dir.id, &self.filter.tags)?
-            } else {
-                false
-            };
+            // Check if this directory or any ancestor matches the full filter criteria
+            // If so, show all files without checking individual file filters
+            let ancestor_matches_filter = self.directory_or_ancestor_matches_filter(dir.id)?;
 
             for file in files {
                 let tags = self.db.get_file_tags(file.id)?;
 
-                // Apply filter if active
-                if self.filter.is_active() {
-                    // Check video filter
+                // Apply filter if active AND no ancestor matches the full filter
+                if self.filter.is_active() && !ancestor_matches_filter {
+                    // Check video filter (always applies even if ancestor matches)
                     if self.filter.video_only {
                         if file.media_type.as_deref() != Some("video") {
                             continue;
                         }
                     }
-                    // Check rating filter (always applies)
+                    // Check rating filter
                     match self.filter.rating {
                         RatingFilter::Any => {}
                         RatingFilter::Unrated => {
@@ -749,12 +745,16 @@ impl AppState {
                         }
                     }
                     // Check tag filter (AND logic)
-                    // Skip this check if directory or ancestor has all the filter tags
-                    if !self.filter.tags.is_empty() && !ancestor_has_all_filter_tags {
+                    if !self.filter.tags.is_empty() {
                         let has_all_tags = self.filter.tags.iter().all(|t| tags.contains(t));
                         if !has_all_tags {
                             continue;
                         }
+                    }
+                } else if self.filter.video_only {
+                    // Even when ancestor matches, video_only filter still applies
+                    if file.media_type.as_deref() != Some("video") {
+                        continue;
                     }
                 }
 
@@ -1139,21 +1139,41 @@ impl AppState {
             .copied()
     }
 
-    /// Check if a directory or any of its ancestors has all the specified tags
-    fn directory_or_ancestor_has_tags(&self, dir_id: i64, tags: &[String]) -> Result<bool> {
+    /// Check if a directory or any of its ancestors matches the full filter criteria
+    /// (both rating and tags, when both are active)
+    fn directory_or_ancestor_matches_filter(&self, dir_id: i64) -> Result<bool> {
         let mut current_id = Some(dir_id);
 
         while let Some(id) = current_id {
-            let dir_tags = self.db.get_directory_tags(id)?;
-            if tags.iter().all(|t| dir_tags.contains(t)) {
-                return Ok(true);
-            }
+            // Find the directory
+            let dir = self.tree.directories.iter().find(|d| d.id == id);
 
-            // Move to parent directory
-            current_id = self.tree.directories
-                .iter()
-                .find(|d| d.id == id)
-                .and_then(|d| d.parent_id);
+            if let Some(dir) = dir {
+                // Check rating filter on directory
+                let dir_matches_rating = match self.filter.rating {
+                    RatingFilter::Any => true,
+                    RatingFilter::Unrated => dir.rating.is_none(),
+                    RatingFilter::MinRating(min) => dir.rating.map(|r| r >= min).unwrap_or(false),
+                };
+
+                // Check tag filter on directory
+                let dir_matches_tags = if self.filter.tags.is_empty() {
+                    true
+                } else {
+                    let dir_tags = self.db.get_directory_tags(id)?;
+                    self.filter.tags.iter().all(|t| dir_tags.contains(t))
+                };
+
+                // Directory matches if it passes both filters
+                if dir_matches_rating && dir_matches_tags {
+                    return Ok(true);
+                }
+
+                // Move to parent directory
+                current_id = dir.parent_id;
+            } else {
+                break;
+            }
         }
 
         Ok(false)
