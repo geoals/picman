@@ -714,11 +714,10 @@ impl AppState {
         if let Some(dir) = self.get_selected_directory() {
             let files = self.db.get_files_in_directory(dir.id)?;
 
-            // Check if this directory itself has all the filter tags
-            // If so, show all files without checking individual file tags
-            let dir_has_all_filter_tags = if !self.filter.tags.is_empty() {
-                let dir_tags = self.db.get_directory_tags(dir.id)?;
-                self.filter.tags.iter().all(|t| dir_tags.contains(t))
+            // Check if this directory or any ancestor has all the filter tags
+            // If so, show all files without checking individual file tags/ratings
+            let ancestor_has_all_filter_tags = if !self.filter.tags.is_empty() {
+                self.directory_or_ancestor_has_tags(dir.id, &self.filter.tags)?
             } else {
                 false
             };
@@ -734,8 +733,8 @@ impl AppState {
                             continue;
                         }
                     }
-                    // Check rating filter (skip if directory has matching tags)
-                    if !dir_has_all_filter_tags {
+                    // Check rating filter (skip if directory/ancestor has matching tags)
+                    if !ancestor_has_all_filter_tags {
                         match self.filter.rating {
                             RatingFilter::Any => {}
                             RatingFilter::Unrated => {
@@ -752,8 +751,8 @@ impl AppState {
                         }
                     }
                     // Check tag filter (AND logic)
-                    // Skip this check if directory itself has all the filter tags
-                    if !self.filter.tags.is_empty() && !dir_has_all_filter_tags {
+                    // Skip this check if directory or ancestor has all the filter tags
+                    if !self.filter.tags.is_empty() && !ancestor_has_all_filter_tags {
                         let has_all_tags = self.filter.tags.iter().all(|t| tags.contains(t));
                         if !has_all_tags {
                             continue;
@@ -1140,6 +1139,26 @@ impl AppState {
         self.get_visible_directories()
             .get(self.tree.selected_index)
             .copied()
+    }
+
+    /// Check if a directory or any of its ancestors has all the specified tags
+    fn directory_or_ancestor_has_tags(&self, dir_id: i64, tags: &[String]) -> Result<bool> {
+        let mut current_id = Some(dir_id);
+
+        while let Some(id) = current_id {
+            let dir_tags = self.db.get_directory_tags(id)?;
+            if tags.iter().all(|t| dir_tags.contains(t)) {
+                return Ok(true);
+            }
+
+            // Move to parent directory
+            current_id = self.tree.directories
+                .iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.parent_id);
+        }
+
+        Ok(false)
     }
 
     /// Handle character input for filter dialog
