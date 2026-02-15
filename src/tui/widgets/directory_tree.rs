@@ -37,7 +37,13 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
 
             let display_name = if name.is_empty() { "." } else { name };
 
-            let line = format!("{}{}{}", indent, icon, display_name);
+            // Show rating as compact "★N" on left, or spaces for alignment
+            let rating = dir
+                .rating
+                .map(|r| format!("★{} ", r))
+                .unwrap_or_else(|| "   ".to_string());
+
+            let line = format!("{}{}{}{}", indent, rating, icon, display_name);
 
             let style = if idx == state.tree.selected_index {
                 if is_focused {
