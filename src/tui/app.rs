@@ -9,6 +9,7 @@ use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::cli::{run_init, run_sync};
 use crate::db::Database;
 
 use super::state::AppState;
@@ -16,18 +17,42 @@ use super::ui::render;
 
 /// Run the TUI application
 pub fn run_tui(library_path: &Path) -> Result<()> {
-    // Open database
     let db_path = library_path.join(".picman.db");
+    let mut status_parts = Vec::new();
+
+    // Auto-init if no database exists
     if !db_path.exists() {
-        anyhow::bail!(
-            "No database found at {}. Run 'picman init' first.",
-            db_path.display()
-        );
+        let stats = run_init(library_path)?;
+        status_parts.push(format!(
+            "Init: {} dirs, {} files",
+            stats.directories, stats.files
+        ));
     }
+
+    // Always sync on startup (fast mtime check)
+    let sync_stats = run_sync(library_path, false, false)?;
+    let sync_changes = sync_stats.directories_added
+        + sync_stats.directories_removed
+        + sync_stats.files_added
+        + sync_stats.files_removed
+        + sync_stats.files_modified;
+    if sync_changes > 0 {
+        status_parts.push(format!(
+            "Sync: +{} -{} files",
+            sync_stats.files_added,
+            sync_stats.files_removed
+        ));
+    }
+
     let db = Database::open(&db_path)?;
 
     // Initialize state
     let mut state = AppState::new(library_path.to_path_buf(), db)?;
+
+    // Show startup status
+    if !status_parts.is_empty() {
+        state.status_message = Some(status_parts.join(" | "));
+    }
 
     // Setup terminal
     enable_raw_mode()?;
@@ -205,6 +230,8 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('t') => state.open_tag_input()?,
         KeyCode::Char('o') => state.open_operations_menu(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
+        KeyCode::Char('p') => state.run_operation(crate::tui::state::OperationType::DirPreview),
+        KeyCode::Char('P') => state.run_operation(crate::tui::state::OperationType::DirPreviewRecursive),
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}
     }

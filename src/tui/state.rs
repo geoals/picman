@@ -148,6 +148,18 @@ impl PreviewCache {
     }
 }
 
+/// Cached directory preview state (2x2 composite image)
+pub struct DirectoryPreviewCache {
+    pub dir_id: i64,
+    pub protocol: Box<dyn StatefulProtocol>,
+}
+
+impl DirectoryPreviewCache {
+    pub fn new(dir_id: i64, protocol: Box<dyn StatefulProtocol>) -> Self {
+        Self { dir_id, protocol }
+    }
+}
+
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -339,6 +351,8 @@ pub enum OperationType {
     Thumbnails,
     Orientation,
     Hash,
+    DirPreview,
+    DirPreviewRecursive,
 }
 
 impl OperationType {
@@ -347,6 +361,8 @@ impl OperationType {
             OperationType::Thumbnails => "Generating thumbnails",
             OperationType::Orientation => "Tagging orientation",
             OperationType::Hash => "Computing hashes",
+            OperationType::DirPreview => "Generating dir preview",
+            OperationType::DirPreviewRecursive => "Generating dir previews",
         }
     }
 
@@ -355,6 +371,8 @@ impl OperationType {
             OperationType::Thumbnails => "thumbnails generated",
             OperationType::Orientation => "files tagged",
             OperationType::Hash => "files hashed",
+            OperationType::DirPreview => "dir preview generated",
+            OperationType::DirPreviewRecursive => "dir previews generated",
         }
     }
 }
@@ -384,6 +402,7 @@ pub struct AppState {
     pub file_list: FileListState,
     pub show_help: bool,
     pub preview_cache: RefCell<Option<PreviewCache>>,
+    pub directory_preview_cache: RefCell<Option<DirectoryPreviewCache>>,
     pub tag_input: Option<TagInputState>,
     pub filter_dialog: Option<FilterDialogState>,
     pub filter: FilterCriteria,
@@ -410,6 +429,7 @@ impl AppState {
             file_list: FileListState::new(),
             show_help: false,
             preview_cache: RefCell::new(None),
+            directory_preview_cache: RefCell::new(None),
             tag_input: None,
             filter_dialog: None,
             filter: FilterCriteria::default(),
@@ -1036,6 +1056,12 @@ impl AppState {
 
     /// Run a background operation on current directory and all subdirectories
     pub fn run_operation(&mut self, operation: OperationType) {
+        // Handle directory preview operations separately
+        if matches!(operation, OperationType::DirPreview | OperationType::DirPreviewRecursive) {
+            self.run_dir_preview_operation(operation);
+            return;
+        }
+
         use crate::tui::widgets::{has_thumbnail, is_image_file, is_video_file};
 
         let selected_dir = match self.get_selected_directory() {
@@ -1081,6 +1107,7 @@ impl AppState {
                             }
                         }
                         OperationType::Hash => file.hash.is_none(),
+                        OperationType::DirPreview | OperationType::DirPreviewRecursive => false,
                     };
 
                     if include {
@@ -1185,6 +1212,98 @@ impl AppState {
                         }
                     }
                 }
+                OperationType::DirPreview | OperationType::DirPreviewRecursive => {
+                    // Handled by run_dir_preview_operation
+                }
+            }
+
+            done.store(true, Ordering::Relaxed);
+        });
+    }
+
+    /// Run directory preview generation (single or recursive)
+    fn run_dir_preview_operation(&mut self, operation: OperationType) {
+        use crate::db::Database;
+        use crate::tui::widgets::{
+            generate_dir_preview, generate_dir_preview_standalone, TempPreviewState,
+        };
+
+        let selected_dir = match self.get_selected_directory() {
+            Some(d) => d.clone(),
+            None => return,
+        };
+
+        // Collect directories to process
+        let dir_data: Vec<Directory> = if operation == OperationType::DirPreview {
+            // Single directory only
+            vec![selected_dir]
+        } else {
+            // Recursive: selected + all descendants
+            let mut dir_ids = vec![selected_dir.id];
+            self.collect_descendant_dir_ids(selected_dir.id, &mut dir_ids);
+            self.tree
+                .directories
+                .iter()
+                .filter(|d| dir_ids.contains(&d.id))
+                .cloned()
+                .collect()
+        };
+
+        let total = dir_data.len();
+        if total == 0 {
+            return;
+        }
+
+        // For single directory, run synchronously (fast enough)
+        if operation == OperationType::DirPreview {
+            generate_dir_preview(self, &dir_data[0]);
+            // Clear cache to reload
+            *self.directory_preview_cache.borrow_mut() = None;
+            self.status_message = Some("Dir preview generated".to_string());
+            return;
+        }
+
+        // For recursive, run in background with progress
+        let completed = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        self.background_progress = Some(BackgroundProgress {
+            operation,
+            total,
+            completed: Arc::clone(&completed),
+            done: Arc::clone(&done),
+            cancelled: Arc::clone(&cancelled),
+        });
+
+        let db_path = self.library_path.join(".picman.db");
+        let library_path = self.library_path.clone();
+        let all_directories = self.tree.directories.clone();
+
+        std::thread::spawn(move || {
+            // We need to create a minimal AppState-like structure for generate_dir_preview
+            // Since it needs access to db and directories, we'll open a new db connection
+            let db = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(_) => {
+                    done.store(true, Ordering::Relaxed);
+                    return;
+                }
+            };
+
+            // Create a temporary state for preview generation
+            let temp_state = TempPreviewState {
+                library_path,
+                db,
+                directories: all_directories,
+            };
+
+            for dir in &dir_data {
+                if cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                generate_dir_preview_standalone(&temp_state, dir);
+                completed.fetch_add(1, Ordering::Relaxed);
             }
 
             done.store(true, Ordering::Relaxed);
