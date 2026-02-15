@@ -26,7 +26,7 @@ pub struct SyncStats {
 }
 
 /// Run the sync command: update database to match filesystem
-pub fn run_sync(library_path: &Path, compute_hashes: bool) -> Result<SyncStats> {
+pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag: bool) -> Result<SyncStats> {
     let library_path = library_path
         .canonicalize()
         .with_context(|| format!("Library path does not exist: {}", library_path.display()))?;
@@ -45,8 +45,10 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool) -> Result<SyncStats> 
     let scanner = Scanner::new(library_path.clone());
     let mut stats = sync_database(&db, &scanner)?;
 
-    // Tag orientation for image files
-    stats.orientation_tagged = tag_orientation(&db, &library_path)?;
+    // Tag orientation for image files (only if requested)
+    if tag_orientation_flag {
+        stats.orientation_tagged = tag_orientation(&db, &library_path)?;
+    }
 
     if compute_hashes {
         let (hashed, errors) = hash_files(&db, &library_path)?;
@@ -224,12 +226,15 @@ fn sync_database(db: &Database, scanner: &Scanner) -> Result<SyncStats> {
         }
     }
 
-    // Delete removed directories
-    for (path, id) in &db_dirs {
-        if !fs_dirs.contains_key(path) {
-            db.delete_directory(*id)?;
-            stats.directories_removed += 1;
-        }
+    // Delete removed directories (deepest first to avoid FK constraint on parent_id)
+    let mut dirs_to_delete: Vec<_> = db_dirs
+        .iter()
+        .filter(|(path, _)| !fs_dirs.contains_key(*path))
+        .collect();
+    dirs_to_delete.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+    for (_, id) in dirs_to_delete {
+        db.delete_directory(*id)?;
+        stats.directories_removed += 1;
     }
 
     // === Phase 3: Add new directories ===
@@ -326,7 +331,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Sync with no changes
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.directories_added, 0);
         assert_eq!(stats.directories_removed, 0);
         assert_eq!(stats.files_added, 0);
@@ -350,7 +355,7 @@ mod tests {
         fs::write(root.join("photos/image2.jpg"), "more data").unwrap();
 
         // Sync
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.files_added, 1);
         assert_eq!(stats.files_removed, 0);
 
@@ -378,7 +383,7 @@ mod tests {
         fs::remove_file(root.join("photos/image2.jpg")).unwrap();
 
         // Sync
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.files_added, 0);
         assert_eq!(stats.files_removed, 1);
 
@@ -407,7 +412,7 @@ mod tests {
         fs::write(root.join("videos/clip.mp4"), "video").unwrap();
 
         // Sync
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.directories_added, 1);
         assert_eq!(stats.files_added, 1);
 
@@ -435,7 +440,7 @@ mod tests {
         fs::remove_dir_all(root.join("videos")).unwrap();
 
         // Sync
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.directories_removed, 1);
         assert_eq!(stats.files_removed, 1);
 
@@ -462,7 +467,7 @@ mod tests {
         fs::write(root.join("photos/image.jpg"), "modified data with more content").unwrap();
 
         // Sync
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, false).unwrap();
         assert_eq!(stats.files_modified, 1);
 
         // Verify size updated in DB
@@ -475,7 +480,7 @@ mod tests {
     #[test]
     fn test_sync_without_init() {
         let temp = TempDir::new().unwrap();
-        let result = run_sync(temp.path(), false);
+        let result = run_sync(temp.path(), false, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No database found"));
     }
@@ -494,7 +499,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Sync with hashing
-        let stats = run_sync(root, true).unwrap();
+        let stats = run_sync(root, true, false).unwrap();
 
         // Should have hashed both files
         assert_eq!(stats.files_hashed, 2);
@@ -526,11 +531,11 @@ mod tests {
 
         // Init and sync with hash
         run_init(root).unwrap();
-        let stats1 = run_sync(root, true).unwrap();
+        let stats1 = run_sync(root, true, false).unwrap();
         assert_eq!(stats1.files_hashed, 1);
 
         // Sync again - should hash 0 files (already hashed)
-        let stats2 = run_sync(root, true).unwrap();
+        let stats2 = run_sync(root, true, false).unwrap();
         assert_eq!(stats2.files_hashed, 0);
     }
 
@@ -545,7 +550,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Hash
-        let stats1 = run_sync(root, true).unwrap();
+        let stats1 = run_sync(root, true, false).unwrap();
         assert_eq!(stats1.files_hashed, 1);
 
         // Get original hash
@@ -560,7 +565,7 @@ mod tests {
         fs::write(root.join("photos/image.jpg"), "modified content").unwrap();
 
         // Sync (detects modification, clears hash)
-        let stats2 = run_sync(root, true).unwrap();
+        let stats2 = run_sync(root, true, false).unwrap();
         assert_eq!(stats2.files_modified, 1);
         assert_eq!(stats2.files_hashed, 1); // Should rehash modified file
 
@@ -591,9 +596,9 @@ mod tests {
         let square_img = image::RgbImage::new(100, 100);
         square_img.save(root.join("photos/square.jpg")).unwrap();
 
-        // Init and sync
+        // Init and sync with orientation tagging
         run_init(root).unwrap();
-        let stats = run_sync(root, false).unwrap();
+        let stats = run_sync(root, false, true).unwrap();
 
         // Should have tagged 2 files (landscape and portrait, not square)
         assert_eq!(stats.orientation_tagged, 2);
@@ -614,7 +619,7 @@ mod tests {
         }
 
         // Sync again - should not re-tag already tagged files
-        let stats2 = run_sync(root, false).unwrap();
+        let stats2 = run_sync(root, false, true).unwrap();
         assert_eq!(stats2.orientation_tagged, 0);
     }
 }

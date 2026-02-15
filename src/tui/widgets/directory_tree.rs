@@ -6,15 +6,14 @@ use ratatui::{
 
 use crate::tui::state::{AppState, Focus};
 
-pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let is_focused = state.focus == Focus::DirectoryTree;
 
     let visible_dirs = state.get_visible_directories();
 
     let items: Vec<ListItem> = visible_dirs
         .iter()
-        .enumerate()
-        .map(|(idx, dir)| {
+        .map(|dir| {
             let depth = state.tree.depth(dir);
             let indent = "  ".repeat(depth);
 
@@ -45,17 +44,7 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
 
             let line = format!("{}{}{}{}", indent, rating, icon, display_name);
 
-            let style = if idx == state.tree.selected_index {
-                if is_focused {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
-                } else {
-                    Style::default().bg(Color::Gray).fg(Color::Black)
-                }
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(line).style(style)
+            ListItem::new(line)
         })
         .collect();
 
@@ -65,12 +54,20 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(" Directories "),
-    );
+    let highlight_style = if is_focused {
+        Style::default().bg(Color::Cyan).fg(Color::Black)
+    } else {
+        Style::default().bg(Color::Gray).fg(Color::Black)
+    };
 
-    frame.render_widget(list, area);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(" Directories "),
+        )
+        .highlight_style(highlight_style);
+
+    frame.render_stateful_widget(list, area, &mut state.tree.list_state);
 }

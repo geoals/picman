@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Result;
-use ratatui::widgets::TableState;
+use ratatui::widgets::{ListState, TableState};
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::db::{Database, Directory, File};
@@ -190,6 +190,7 @@ pub struct TreeState {
     pub directories: Vec<Directory>,
     pub selected_index: usize,
     pub expanded: HashSet<i64>,
+    pub list_state: ListState,
 }
 
 impl TreeState {
@@ -198,6 +199,7 @@ impl TreeState {
             directories,
             selected_index: 0,
             expanded: HashSet::new(),
+            list_state: ListState::default().with_selected(Some(0)),
         }
     }
 
@@ -392,6 +394,7 @@ impl AppState {
                     } else {
                         self.tree.selected_index = 0; // Wrap to top
                     }
+                    self.tree.list_state.select(Some(self.tree.selected_index));
                     self.load_files_for_selected_directory()?;
                 }
             }
@@ -419,6 +422,7 @@ impl AppState {
                     } else {
                         self.tree.selected_index = visible_count - 1; // Wrap to bottom
                     }
+                    self.tree.list_state.select(Some(self.tree.selected_index));
                     self.load_files_for_selected_directory()?;
                 }
             }
@@ -448,6 +452,7 @@ impl AppState {
                         let visible = self.get_visible_directories();
                         if let Some(pos) = visible.iter().position(|d| d.id == parent_id) {
                             self.tree.selected_index = pos;
+                            self.tree.list_state.select(Some(pos));
                         }
                     }
                 }
@@ -499,6 +504,7 @@ impl AppState {
                         }
                         // Move to first child
                         self.tree.selected_index += 1;
+                        self.tree.list_state.select(Some(self.tree.selected_index));
                         self.load_files_for_selected_directory()?;
                     } else {
                         // Leaf directory - load files and move to file list
@@ -721,6 +727,7 @@ impl AppState {
                 let visible = self.get_visible_directories();
                 if !visible.iter().any(|d| d.id == dir_id) {
                     self.tree.selected_index = 0;
+                    self.tree.list_state.select(Some(0));
                 }
             }
         } else {

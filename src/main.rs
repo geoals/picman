@@ -31,6 +31,9 @@ enum Commands {
         /// Recompute hashes for changed files
         #[arg(long)]
         hash: bool,
+        /// Auto-tag image orientation (landscape/portrait)
+        #[arg(long)]
+        orientation: bool,
     },
     /// Find duplicate files
     Dupes {
@@ -103,8 +106,8 @@ fn main() -> Result<()> {
                 stats.directories, stats.files, stats.images, stats.videos
             );
         }
-        Some(Commands::Sync { path, hash }) => {
-            let stats = run_sync(&path, hash)?;
+        Some(Commands::Sync { path, hash, orientation }) => {
+            let stats = run_sync(&path, hash, orientation)?;
             println!(
                 "Synced: +{} -{} directories, +{} -{} ~{} files",
                 stats.directories_added,
@@ -118,6 +121,9 @@ fn main() -> Result<()> {
                     "Hashed: {} files ({} errors)",
                     stats.files_hashed, stats.hash_errors
                 );
+            }
+            if orientation {
+                println!("Orientation tagged: {} files", stats.orientation_tagged);
             }
         }
         Some(Commands::Dupes { subdir }) => {
