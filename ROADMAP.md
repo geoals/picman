@@ -24,7 +24,7 @@
 ### Phase 4: TUI Actions
 - [x] Rating in TUI (1-5/asdfg keys, works on files and directories)
 - [x] Tagging in TUI (t key, popup with autocomplete)
-- [x] Filtering by rating/tag (m key, AND logic for multiple tags)
+- [x] Filtering by rating/tag/video (m key, AND logic for multiple tags)
 - [x] Auto-tagging orientation (landscape/portrait) during sync
 
 ## Planned (Core)
@@ -70,8 +70,8 @@
 - [ ] Move/merge duplicate directories
 
 ### Media Support
-- [ ] Video thumbnail extraction
-- [ ] Video preview in TUI
+- [x] Video thumbnail extraction (via ffmpeg)
+- [x] Video preview in TUI (thumbnails)
 - [ ] GIF handling
 
 ## Won't Implement (Out of Scope)

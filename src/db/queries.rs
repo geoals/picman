@@ -552,72 +552,64 @@ impl Database {
         &self,
         min_rating: Option<i32>,
         tags: &[String],
+        video_only: bool,
     ) -> Result<std::collections::HashSet<i64>> {
         use std::collections::HashSet;
 
         let mut matching_dir_ids: HashSet<i64> = HashSet::new();
 
-        if tags.is_empty() && min_rating.is_none() {
+        if tags.is_empty() && min_rating.is_none() && !video_only {
             // No filter - return empty set (caller should show all)
             return Ok(matching_dir_ids);
         }
 
-        // Build query based on filter criteria
-        let query = if tags.is_empty() {
-            // Only rating filter
-            format!(
-                "SELECT DISTINCT f.directory_id
-                 FROM files f
-                 WHERE f.rating >= ?1"
-            )
-        } else if min_rating.is_none() {
-            // Only tag filter (AND logic)
-            format!(
-                "SELECT DISTINCT f.directory_id
-                 FROM files f
-                 WHERE (
-                     SELECT COUNT(DISTINCT t.name)
-                     FROM file_tags ft
-                     JOIN tags t ON ft.tag_id = t.id
-                     WHERE ft.file_id = f.id AND t.name IN ({})
-                 ) = ?1",
-                (0..tags.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",")
-            )
-        } else {
-            // Both rating and tag filter
-            format!(
-                "SELECT DISTINCT f.directory_id
-                 FROM files f
-                 WHERE f.rating >= ?1 AND (
-                     SELECT COUNT(DISTINCT t.name)
-                     FROM file_tags ft
-                     JOIN tags t ON ft.tag_id = t.id
-                     WHERE ft.file_id = f.id AND t.name IN ({})
-                 ) = ?2",
-                (0..tags.len()).map(|i| format!("?{}", i + 3)).collect::<Vec<_>>().join(",")
-            )
-        };
+        // Build WHERE clauses
+        let mut conditions = Vec::new();
+
+        if video_only {
+            conditions.push("f.media_type = 'video'".to_string());
+        }
+
+        if min_rating.is_some() {
+            conditions.push("f.rating >= ?1".to_string());
+        }
+
+        if !tags.is_empty() {
+            let tag_param_start = if min_rating.is_some() { 2 } else { 1 };
+            let tag_count_param = tag_param_start;
+            let tag_placeholders = (0..tags.len())
+                .map(|i| format!("?{}", tag_param_start + 1 + i))
+                .collect::<Vec<_>>()
+                .join(",");
+            conditions.push(format!(
+                "(SELECT COUNT(DISTINCT t.name) FROM file_tags ft JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id = f.id AND t.name IN ({})) = ?{}",
+                tag_placeholders, tag_count_param
+            ));
+        }
+
+        let query = format!(
+            "SELECT DISTINCT f.directory_id FROM files f WHERE {}",
+            conditions.join(" AND ")
+        );
 
         let mut stmt = self.connection().prepare(&query)?;
 
-        // Execute with appropriate parameters
-        let dir_ids: Vec<i64> = if tags.is_empty() {
-            stmt.query_map([min_rating.unwrap()], |row| row.get(0))?
-                .collect::<Result<Vec<_>, _>>()?
-        } else if min_rating.is_none() {
+        // Build parameters based on what filters are active
+        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(rating) = min_rating {
+            params.push(rating.into());
+        }
+
+        if !tags.is_empty() {
             let tag_count = tags.len() as i64;
-            let mut params: Vec<rusqlite::types::Value> = vec![tag_count.into()];
+            params.push(tag_count.into());
             params.extend(tags.iter().map(|t| t.clone().into()));
-            stmt.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let rating = min_rating.unwrap();
-            let tag_count = tags.len() as i64;
-            let mut params: Vec<rusqlite::types::Value> = vec![rating.into(), tag_count.into()];
-            params.extend(tags.iter().map(|t| t.clone().into()));
-            stmt.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        }
+
+        let dir_ids: Vec<i64> = stmt
+            .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
 
         matching_dir_ids.extend(dir_ids.iter());
 
@@ -1076,18 +1068,18 @@ mod tests {
         db.add_file_tag(file2_id, "vacation").unwrap();
 
         // No filter returns empty set
-        let result = db.get_directories_with_matching_files(None, &[]).unwrap();
+        let result = db.get_directories_with_matching_files(None, &[], false).unwrap();
         assert!(result.is_empty());
 
         // Rating filter only
-        let result = db.get_directories_with_matching_files(Some(4), &[]).unwrap();
+        let result = db.get_directories_with_matching_files(Some(4), &[], false).unwrap();
         assert!(result.contains(&vacation_id)); // file2 has rating 5
         assert!(result.contains(&photos_id));   // ancestor of vacation
         assert!(result.contains(&root_id));     // ancestor of photos
         assert!(!result.contains(&work_id));    // file3 has rating 2
 
         // Tag filter only (single tag)
-        let result = db.get_directories_with_matching_files(None, &["family".to_string()]).unwrap();
+        let result = db.get_directories_with_matching_files(None, &["family".to_string()], false).unwrap();
         assert!(result.contains(&photos_id));   // file1 has "family" tag
         assert!(result.contains(&vacation_id)); // file2 has "family" tag
         assert!(result.contains(&root_id));     // ancestor
@@ -1096,7 +1088,8 @@ mod tests {
         // Tag filter only (multiple tags - AND logic)
         let result = db.get_directories_with_matching_files(
             None,
-            &["family".to_string(), "vacation".to_string()]
+            &["family".to_string(), "vacation".to_string()],
+            false,
         ).unwrap();
         assert!(result.contains(&vacation_id)); // file2 has both tags
         assert!(result.contains(&photos_id));   // ancestor
@@ -1106,7 +1099,8 @@ mod tests {
         // Combined rating and tag filter
         let result = db.get_directories_with_matching_files(
             Some(4),
-            &["family".to_string()]
+            &["family".to_string()],
+            false,
         ).unwrap();
         assert!(result.contains(&vacation_id)); // file2 has rating 5 and "family" tag
         assert!(result.contains(&photos_id));   // ancestor

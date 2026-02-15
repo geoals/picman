@@ -19,6 +19,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     // Filter indicator
     if state.filter.is_active() {
         let mut filter_parts = Vec::new();
+        if state.filter.video_only {
+            filter_parts.push("video".to_string());
+        }
         if let Some(r) = state.filter.min_rating {
             filter_parts.push(format!("{}+", r));
         }

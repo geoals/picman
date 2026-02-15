@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::Result;
 use ratatui::widgets::TableState;
@@ -13,11 +14,12 @@ use crate::db::{Database, Directory, File};
 pub struct FilterCriteria {
     pub min_rating: Option<i32>,  // None = any rating (including unrated)
     pub tags: Vec<String>,        // Empty = any tags, multiple = AND logic
+    pub video_only: bool,         // If true, only show video files
 }
 
 impl FilterCriteria {
     pub fn is_active(&self) -> bool {
-        self.min_rating.is_some() || !self.tags.is_empty()
+        self.min_rating.is_some() || !self.tags.is_empty() || self.video_only
     }
 }
 
@@ -37,6 +39,7 @@ pub struct FilterDialogState {
     pub filtered_tags: Vec<String>,    // Autocomplete suggestions
     pub tag_list_index: usize,
     pub focus: FilterDialogFocus,
+    pub video_only: bool,              // Filter to show only videos
 }
 
 impl FilterDialogState {
@@ -50,6 +53,7 @@ impl FilterDialogState {
             filtered_tags,
             tag_list_index: 0,
             focus: FilterDialogFocus::Rating,
+            video_only: current_filter.video_only,
         }
     }
 
@@ -95,6 +99,7 @@ impl FilterDialogState {
         FilterCriteria {
             min_rating: self.rating_selected,
             tags: self.selected_tags.clone(),
+            video_only: self.video_only,
         }
     }
 }
@@ -348,6 +353,12 @@ impl AppState {
 
                 // Apply filter if active
                 if self.filter.is_active() {
+                    // Check video filter
+                    if self.filter.video_only {
+                        if file.media_type.as_deref() != Some("video") {
+                            continue;
+                        }
+                    }
                     // Check rating filter
                     if let Some(min_rating) = self.filter.min_rating {
                         match file.rating {
@@ -497,11 +508,36 @@ impl AppState {
                 }
             }
             Focus::FileList => {
-                // Preview is automatic based on selection
+                // Open file with default viewer
+                self.open_selected_file()?;
             }
         }
         Ok(())
     }
+
+    /// Open the selected file with the default system viewer
+    pub fn open_selected_file(&self) -> Result<()> {
+        if let Some(path) = self.selected_file_path() {
+            #[cfg(target_os = "linux")]
+            {
+                Command::new("xdg-open")
+                    .arg(&path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()?;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                Command::new("open")
+                    .arg(&path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()?;
+            }
+        }
+        Ok(())
+    }
+
 
     pub fn set_rating(&mut self, rating: Option<i32>) -> Result<()> {
         match self.focus {
@@ -660,6 +696,7 @@ impl AppState {
         if let Some(ref mut dialog) = self.filter_dialog {
             dialog.rating_selected = None;
             dialog.selected_tags.clear();
+            dialog.video_only = false;
             dialog.update_tag_filter();
         }
         // Reload files without filter
@@ -676,6 +713,7 @@ impl AppState {
             self.matching_dir_ids = self.db.get_directories_with_matching_files(
                 self.filter.min_rating,
                 &self.filter.tags,
+                self.filter.video_only,
             )?;
 
             // Reset selection if current directory is not visible
@@ -789,6 +827,13 @@ impl AppState {
             if dialog.focus == FilterDialogFocus::Rating {
                 dialog.rating_selected = Some(rating);
             }
+        }
+    }
+
+    /// Toggle video-only filter in dialog
+    pub fn filter_dialog_toggle_video(&mut self) {
+        if let Some(ref mut dialog) = self.filter_dialog {
+            dialog.video_only = !dialog.video_only;
         }
     }
 

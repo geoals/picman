@@ -35,6 +35,7 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     // Main loop
     let result = run_app(&mut terminal, &mut state);
@@ -61,8 +62,9 @@ fn run_app(
         // Wait for first event
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
-                if handle_key(key.code, state)? {
-                    return Ok(());
+                match handle_key(key.code, state)? {
+                    KeyAction::Quit => return Ok(()),
+                    KeyAction::Continue => {}
                 }
             }
         }
@@ -71,8 +73,9 @@ fn run_app(
         while event::poll(Duration::ZERO)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    if handle_key(key.code, state)? {
-                        return Ok(());
+                    match handle_key(key.code, state)? {
+                        KeyAction::Quit => return Ok(()),
+                        KeyAction::Continue => {}
                     }
                 }
             }
@@ -80,8 +83,13 @@ fn run_app(
     }
 }
 
-/// Handle a key press. Returns true if the app should quit.
-fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
+enum KeyAction {
+    Quit,
+    Continue,
+}
+
+/// Handle a key press. Returns KeyAction indicating what to do next.
+fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
     // Handle filter dialog if active
     if state.filter_dialog.is_some() {
         match code {
@@ -103,10 +111,11 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
             KeyCode::Char('3') | KeyCode::Char('d') => state.filter_dialog_set_rating(3),
             KeyCode::Char('4') | KeyCode::Char('f') => state.filter_dialog_set_rating(4),
             KeyCode::Char('5') | KeyCode::Char('g') => state.filter_dialog_set_rating(5),
+            KeyCode::Char('v') => state.filter_dialog_toggle_video(),
             KeyCode::Char(c) => state.filter_dialog_char(c),
             _ => {}
         }
-        return Ok(false);
+        return Ok(KeyAction::Continue);
     }
 
     // Handle tag input popup if active
@@ -120,12 +129,12 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
             KeyCode::Char(c) => state.tag_input_char(c),
             _ => {}
         }
-        return Ok(false);
+        return Ok(KeyAction::Continue);
     }
 
     // Normal key handling
     match code {
-        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('q') => return Ok(KeyAction::Quit),
         KeyCode::Char('j') | KeyCode::Down => state.move_down()?,
         KeyCode::Char('k') | KeyCode::Up => state.move_up()?,
         KeyCode::Char('h') | KeyCode::Left => state.move_left(),
@@ -143,5 +152,6 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}
     }
-    Ok(false)
+    Ok(KeyAction::Continue)
 }
+

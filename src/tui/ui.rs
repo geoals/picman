@@ -85,11 +85,12 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     Tab      Switch focus
 
   Actions:
-    Enter    Select directory
+    Enter    Open file / Select dir
     1-5/asdfg Set rating
     0        Clear rating
     t        Add tag
     m        Filter
+    p        Play video (mpv)
     ?        Toggle help
     q        Quit
 "#;

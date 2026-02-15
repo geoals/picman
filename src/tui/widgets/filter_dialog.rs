@@ -29,6 +29,7 @@ pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialog
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),  // Rating row
+            Constraint::Length(1),  // Video filter row
             Constraint::Length(2),  // Selected tags
             Constraint::Length(2),  // Tag input
             Constraint::Min(4),     // Autocomplete list
@@ -39,17 +40,27 @@ pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialog
     // Rating row
     render_rating_row(frame, chunks[0], dialog);
 
+    // Video filter row
+    render_video_row(frame, chunks[1], dialog);
+
     // Selected tags row
-    render_selected_tags(frame, chunks[1], dialog);
+    render_selected_tags(frame, chunks[2], dialog);
 
     // Tag input row
-    render_tag_input(frame, chunks[2], dialog);
+    render_tag_input(frame, chunks[3], dialog);
 
     // Autocomplete list
-    render_autocomplete_list(frame, chunks[3], dialog);
+    render_autocomplete_list(frame, chunks[4], dialog);
 
     // Help text
-    render_help_text(frame, chunks[4]);
+    render_help_text(frame, chunks[5]);
+}
+
+fn render_video_row(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
+    let checkbox = if dialog.video_only { "[x]" } else { "[ ]" };
+    let text = format!("Video only: {}  (press v to toggle)", checkbox);
+    let paragraph = Paragraph::new(text);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_rating_row(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {

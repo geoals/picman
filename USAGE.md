@@ -24,6 +24,15 @@ picman /path/to/library
 | `?` | Toggle help overlay |
 | `q` | Quit |
 
+### File Actions
+
+- **Enter on file**: Opens file with default system viewer (`xdg-open` on Linux, `open` on macOS)
+- **Enter on directory**: Expands directory or moves to file list
+
+### Video Preview
+
+Video files show a thumbnail preview extracted via ffmpeg. Thumbnails are cached in the system temp directory for fast subsequent access.
+
 ### Tag Popup
 
 When adding a tag (`t`):
@@ -37,6 +46,7 @@ When adding a tag (`t`):
 When filtering (`m`):
 - `Tab` to switch between Rating and Tag sections
 - `←` / `→` or `1-5` / `a-g` to select minimum rating (or "Any")
+- `v` to toggle video-only filter
 - Type to filter available tags, `↑` / `↓` to navigate
 - `Enter` to add selected tag to filter (multiple tags use AND logic)
 - `Backspace` to remove last added tag (when input is empty)
@@ -44,7 +54,7 @@ When filtering (`m`):
 - `Enter` (with no tag selected) to apply filter and close
 - `Esc` to cancel without applying
 
-When a filter is active, the status bar shows: `[Filter: 3+ #tag1 #tag2]`
+When a filter is active, the status bar shows: `[Filter: video 3+ #tag1 #tag2]`
 
 ## CLI Commands
 
