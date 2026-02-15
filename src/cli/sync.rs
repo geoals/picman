@@ -22,6 +22,7 @@ pub struct SyncStats {
     pub files_modified: usize,
     pub files_hashed: usize,
     pub hash_errors: usize,
+    pub orientation_tagged: usize,
 }
 
 /// Run the sync command: update database to match filesystem
@@ -44,6 +45,9 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool) -> Result<SyncStats> 
     let scanner = Scanner::new(library_path.clone());
     let mut stats = sync_database(&db, &scanner)?;
 
+    // Tag orientation for image files
+    stats.orientation_tagged = tag_orientation(&db, &library_path)?;
+
     if compute_hashes {
         let (hashed, errors) = hash_files(&db, &library_path)?;
         stats.files_hashed = hashed;
@@ -54,6 +58,72 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool) -> Result<SyncStats> 
 }
 
 const HASH_BATCH_SIZE: usize = 1000;
+
+const ORIENTATION_BATCH_SIZE: usize = 5000;
+
+/// Detect image orientation and add landscape/portrait tags
+fn tag_orientation(db: &Database, library_path: &Path) -> Result<usize> {
+    print!("Finding images needing orientation...");
+    let _ = io::stdout().flush();
+    let files = db.get_files_needing_orientation()?;
+    let total = files.len();
+    println!(" {}", total);
+
+    if total == 0 {
+        return Ok(0);
+    }
+
+    let mut total_tagged = 0usize;
+    let mut processed = 0usize;
+
+    // Process in batches for progress updates and DB writes
+    for batch in files.chunks(ORIENTATION_BATCH_SIZE) {
+        // Detect orientations in parallel
+        let results: Vec<_> = batch
+            .par_iter()
+            .map(|file| {
+                let full_path = library_path.join(&file.path);
+                let orientation = detect_orientation(&full_path);
+                (file.id, orientation)
+            })
+            .collect();
+
+        // Write batch to database in a transaction
+        db.begin_transaction()?;
+        for (id, orientation) in results {
+            if let Some(tag) = orientation {
+                db.add_file_tag(id, tag)?;
+                total_tagged += 1;
+            }
+        }
+        db.commit()?;
+
+        processed += batch.len();
+        print!("\rOrientation: {}/{}", processed, total);
+        let _ = io::stdout().flush();
+    }
+
+    println!(); // Newline after progress
+
+    Ok(total_tagged)
+}
+
+/// Detect orientation from image dimensions
+/// Returns "landscape" if width > height, "portrait" if height > width, None if square or error
+fn detect_orientation(path: &Path) -> Option<&'static str> {
+    match imagesize::size(path) {
+        Ok(size) => {
+            if size.width > size.height {
+                Some("landscape")
+            } else if size.height > size.width {
+                Some("portrait")
+            } else {
+                None // Square
+            }
+        }
+        Err(_) => None,
+    }
+}
 
 /// Hash files that have NULL hash values
 fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
@@ -500,5 +570,51 @@ mod tests {
         let new_hash = files[0].hash.clone().unwrap();
 
         assert_ne!(original_hash, new_hash);
+    }
+
+    #[test]
+    fn test_sync_tags_orientation() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        fs::create_dir_all(root.join("photos")).unwrap();
+
+        // Create a landscape image (wider than tall) - 100x50
+        let landscape_img = image::RgbImage::new(100, 50);
+        landscape_img.save(root.join("photos/landscape.jpg")).unwrap();
+
+        // Create a portrait image (taller than wide) - 50x100
+        let portrait_img = image::RgbImage::new(50, 100);
+        portrait_img.save(root.join("photos/portrait.jpg")).unwrap();
+
+        // Create a square image - should not be tagged
+        let square_img = image::RgbImage::new(100, 100);
+        square_img.save(root.join("photos/square.jpg")).unwrap();
+
+        // Init and sync
+        run_init(root).unwrap();
+        let stats = run_sync(root, false).unwrap();
+
+        // Should have tagged 2 files (landscape and portrait, not square)
+        assert_eq!(stats.orientation_tagged, 2);
+
+        // Verify tags in database
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let dir = db.get_directory_by_path("photos").unwrap().unwrap();
+        let files = db.get_files_in_directory(dir.id).unwrap();
+
+        for file in &files {
+            let tags = db.get_file_tags(file.id).unwrap();
+            match file.filename.as_str() {
+                "landscape.jpg" => assert!(tags.contains(&"landscape".to_string())),
+                "portrait.jpg" => assert!(tags.contains(&"portrait".to_string())),
+                "square.jpg" => assert!(!tags.contains(&"landscape".to_string()) && !tags.contains(&"portrait".to_string())),
+                _ => panic!("Unexpected file"),
+            }
+        }
+
+        // Sync again - should not re-tag already tagged files
+        let stats2 = run_sync(root, false).unwrap();
+        assert_eq!(stats2.orientation_tagged, 0);
     }
 }

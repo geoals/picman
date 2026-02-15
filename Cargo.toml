@@ -23,6 +23,9 @@ crossterm = "0.28"
 ratatui-image = { version = "1", features = ["rustix"] }
 image = "0.25"
 
+# Fast image dimension reading
+imagesize = "0.13"
+
 # Error handling
 anyhow = "1"
 thiserror = "1"

@@ -61,6 +61,8 @@ picman sync /path/to/library
 picman sync /path/to/library --hash  # also compute file hashes
 ```
 
+During sync, image files are automatically tagged with `landscape` or `portrait` based on their dimensions. Square images are not tagged.
+
 ### list
 List files with optional filters.
 ```bash

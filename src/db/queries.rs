@@ -644,6 +644,42 @@ impl Database {
         Ok(matching_dir_ids)
     }
 
+    // ==================== Orientation Operations ====================
+
+    /// Get image files that don't have landscape/portrait tags yet
+    pub fn get_files_needing_orientation(&self) -> Result<Vec<FileToHash>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, d.path, f.filename
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.media_type = 'image'
+               AND NOT EXISTS (
+                   SELECT 1 FROM file_tags ft
+                   JOIN tags t ON ft.tag_id = t.id
+                   WHERE ft.file_id = f.id AND t.name IN ('landscape', 'portrait')
+               )
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let files: Vec<FileToHash> = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let dir_path: String = row.get(1)?;
+                let filename: String = row.get(2)?;
+
+                let path = if dir_path.is_empty() {
+                    PathBuf::from(&filename)
+                } else {
+                    PathBuf::from(&dir_path).join(&filename)
+                };
+
+                Ok(FileToHash { id, path })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
     // ==================== Hash Operations ====================
 
     /// Get all files that need hashing (where hash IS NULL)

@@ -25,6 +25,7 @@
 - [x] Rating in TUI (1-5/asdfg keys, works on files and directories)
 - [x] Tagging in TUI (t key, popup with autocomplete)
 - [x] Filtering by rating/tag (m key, AND logic for multiple tags)
+- [x] Auto-tagging orientation (landscape/portrait) during sync
 
 ## Planned (Core)
 
