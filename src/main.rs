@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use picman::cli::{run_generate_previews, run_generate_thumbnails, run_init, run_list, run_rate, run_sync, run_tag, ListOptions, TagOptions};
+use picman::cli::{run_generate_previews, run_generate_thumbnails, run_init, run_list, run_rate, run_repair, run_sync, run_tag, ListOptions, TagOptions};
 use picman::tui::run_tui;
 use std::path::PathBuf;
 
@@ -104,6 +104,12 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// Repair directory parent relationships based on paths
+    Repair {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -128,6 +134,12 @@ fn main() -> Result<()> {
                 stats.files_removed,
                 stats.files_modified
             );
+            if stats.directories_moved > 0 {
+                println!(
+                    "Moved: {} directories (metadata preserved)",
+                    stats.directories_moved
+                );
+            }
             if hash {
                 println!(
                     "Hashed: {} files ({} errors)",
@@ -217,6 +229,14 @@ fn main() -> Result<()> {
                 "Done: {} generated, {} skipped, {} failed, {} total",
                 stats.generated, stats.skipped, stats.failed, stats.total
             );
+        }
+        Some(Commands::Repair { path }) => {
+            let fixed = run_repair(&path)?;
+            if fixed == 0 {
+                println!("All directory parent relationships are correct.");
+            } else {
+                println!("Fixed {} directory parent relationships.", fixed);
+            }
         }
         None => {
             // Launch TUI

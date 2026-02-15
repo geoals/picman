@@ -59,6 +59,26 @@ fn get_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
     Some(cache_dir.join(format!("{:016x}.jpg", hasher.finish())))
 }
 
+/// Compute thumbnail path for a given path and mtime (for moving thumbnails)
+/// This allows computing the path without the file existing at that location
+pub fn compute_thumbnail_path(original_path: &Path, mtime: std::time::SystemTime) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let cache_dir = get_thumbnail_dir()?;
+    let mut hasher = DefaultHasher::new();
+    original_path.hash(&mut hasher);
+    mtime.hash(&mut hasher);
+
+    Some(cache_dir.join(format!("{:016x}.jpg", hasher.finish())))
+}
+
+/// Compute video thumbnail path for a given path and mtime
+pub fn compute_video_thumbnail_path(original_path: &Path, mtime: std::time::SystemTime) -> Option<PathBuf> {
+    compute_thumbnail_path(original_path, mtime)
+        .map(|p| p.with_file_name(format!("vid_{}", p.file_name().unwrap().to_string_lossy())))
+}
+
 /// Check if a thumbnail exists for a file (image or video)
 pub fn has_thumbnail(path: &Path) -> bool {
     if is_image_file(path) {

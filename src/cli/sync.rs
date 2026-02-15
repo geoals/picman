@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use crate::db::Database;
 use crate::hash::compute_file_hash;
 use crate::scanner::Scanner;
+use crate::tui::widgets::{compute_thumbnail_path, compute_video_thumbnail_path, is_image_file, is_video_file};
 
 use super::init::DB_FILENAME;
 
@@ -17,12 +18,23 @@ use super::init::DB_FILENAME;
 pub struct SyncStats {
     pub directories_added: usize,
     pub directories_removed: usize,
+    pub directories_moved: usize,
     pub files_added: usize,
     pub files_removed: usize,
     pub files_modified: usize,
     pub files_hashed: usize,
     pub hash_errors: usize,
     pub orientation_tagged: usize,
+}
+
+/// Metadata to preserve when a directory is moved
+struct DirectoryMetadata {
+    rating: Option<i32>,
+    tags: Vec<String>,
+    /// Files in this directory (filename only) for thumbnail migration
+    files: Vec<String>,
+    /// The old directory path (for computing old thumbnail paths)
+    old_path: String,
 }
 
 /// Run the sync command: update database to match filesystem
@@ -43,7 +55,7 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag:
         .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
 
     let scanner = Scanner::new(library_path.clone());
-    let mut stats = sync_database(&db, &scanner)?;
+    let mut stats = sync_database(&db, &scanner, &library_path)?;
 
     // Tag orientation for image files (only if requested)
     if tag_orientation_flag {
@@ -195,7 +207,7 @@ fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
 }
 
 /// Sync database with filesystem
-fn sync_database(db: &Database, scanner: &Scanner) -> Result<SyncStats> {
+fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Result<SyncStats> {
     let mut stats = SyncStats::default();
 
     db.begin_transaction()?;
@@ -230,7 +242,66 @@ fn sync_database(db: &Database, scanner: &Scanner) -> Result<SyncStats> {
         .map(|d| (d.id, d.path))
         .collect();
 
-    // === Phase 2: Delete removed items (files first due to FK constraint) ===
+    // === Phase 2: Detect moved directories and collect metadata ===
+
+    // Find directories that will be deleted
+    let dirs_to_delete: Vec<_> = db_dirs
+        .iter()
+        .filter(|(path, _)| !fs_dirs.contains_key(*path))
+        .collect();
+
+    // Find new directories
+    let new_dir_paths: Vec<_> = fs_dirs
+        .keys()
+        .filter(|path| !db_dirs.contains_key(*path))
+        .collect();
+
+    // Collect metadata from directories being deleted, keyed by basename
+    // Also collect file names for thumbnail migration
+    let mut deleted_metadata: HashMap<String, DirectoryMetadata> = HashMap::new();
+    for (path, &id) in &dirs_to_delete {
+        let dir = db.get_directory(id)?;
+        let tags = db.get_directory_tags(id)?;
+        let files_in_dir = db.get_files_in_directory(id)?;
+
+        let has_metadata = dir.as_ref().map(|d| d.rating.is_some()).unwrap_or(false)
+            || !tags.is_empty();
+        let has_files = !files_in_dir.is_empty();
+
+        // Preserve if has metadata OR has files (for thumbnail migration)
+        if has_metadata || has_files {
+            let basename = Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            // Check if this basename exists in new directories (potential move)
+            let matches_in_new: Vec<_> = new_dir_paths
+                .iter()
+                .filter(|p| {
+                    Path::new(*p)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .as_ref() == Some(&basename)
+                })
+                .collect();
+
+            // Only preserve if exactly one match (unambiguous move)
+            if matches_in_new.len() == 1 {
+                deleted_metadata.insert(
+                    basename,
+                    DirectoryMetadata {
+                        rating: dir.and_then(|d| d.rating),
+                        tags,
+                        files: files_in_dir.into_iter().map(|f| f.filename).collect(),
+                        old_path: path.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    // === Phase 3: Delete removed items (files first due to FK constraint) ===
 
     // Delete removed files
     for file in &db_files {
@@ -242,38 +313,96 @@ fn sync_database(db: &Database, scanner: &Scanner) -> Result<SyncStats> {
     }
 
     // Delete removed directories (deepest first to avoid FK constraint on parent_id)
-    let mut dirs_to_delete: Vec<_> = db_dirs
-        .iter()
-        .filter(|(path, _)| !fs_dirs.contains_key(*path))
-        .collect();
-    dirs_to_delete.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
-    for (_, id) in dirs_to_delete {
+    let mut dirs_to_delete_sorted = dirs_to_delete;
+    dirs_to_delete_sorted.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+    for (_, id) in dirs_to_delete_sorted {
         db.delete_directory(*id)?;
         stats.directories_removed += 1;
     }
 
-    // === Phase 3: Add new directories ===
+    // === Phase 4: Add new directories ===
+
+    // Collect new directories and sort by depth (parents before children)
+    let mut new_dirs: Vec<_> = fs_dirs
+        .iter()
+        .filter(|(path, _)| !db_dirs.contains_key(*path))
+        .collect();
+    new_dirs.sort_by_key(|(path, _)| path.matches('/').count());
 
     let mut dir_path_to_id: HashMap<String, i64> = HashMap::new();
-    for (path, mtime) in &fs_dirs {
-        if !db_dirs.contains_key(path) {
-            let parent_path = Path::new(path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .filter(|s| !s.is_empty());
+    for (path, mtime) in new_dirs {
+        let parent_path = Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty());
 
-            let parent_id = parent_path
-                .as_ref()
-                .and_then(|p| dir_path_to_id.get(p).copied().or_else(|| {
-                    db.get_directory_by_path(p).ok().flatten().map(|d| d.id)
-                }));
+        let parent_id = parent_path
+            .as_ref()
+            .and_then(|p| dir_path_to_id.get(p).copied().or_else(|| {
+                db.get_directory_by_path(p).ok().flatten().map(|d| d.id)
+            }));
 
-            let id = db.insert_directory(path, parent_id, Some(*mtime))?;
-            dir_path_to_id.insert(path.clone(), id);
-            stats.directories_added += 1;
-        } else {
-            dir_path_to_id.insert(path.clone(), db_dirs[path]);
+        let id = db.insert_directory(path, parent_id, Some(*mtime))?;
+        dir_path_to_id.insert(path.clone(), id);
+        stats.directories_added += 1;
+
+        // Check if this directory was moved (has metadata to restore)
+        let basename = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if let Some(metadata) = deleted_metadata.remove(&basename) {
+            // Restore rating
+            if let Some(rating) = metadata.rating {
+                db.set_directory_rating(id, Some(rating))?;
+            }
+            // Restore tags
+            for tag in &metadata.tags {
+                db.add_directory_tag(id, tag)?;
+            }
+
+            // Move thumbnails for files in this directory
+            for filename in &metadata.files {
+                let old_file_path = library_path.join(&metadata.old_path).join(filename);
+                let new_file_path = library_path.join(path).join(filename);
+
+                // Get mtime from the new file location
+                if let Ok(file_meta) = std::fs::metadata(&new_file_path) {
+                    if let Ok(mtime) = file_meta.modified() {
+                        // Move image thumbnail
+                        if is_image_file(&new_file_path) {
+                            if let (Some(old_thumb), Some(new_thumb)) = (
+                                compute_thumbnail_path(&old_file_path, mtime),
+                                compute_thumbnail_path(&new_file_path, mtime),
+                            ) {
+                                if old_thumb.exists() && old_thumb != new_thumb {
+                                    let _ = std::fs::rename(&old_thumb, &new_thumb);
+                                }
+                            }
+                        }
+                        // Move video thumbnail
+                        else if is_video_file(&new_file_path) {
+                            if let (Some(old_thumb), Some(new_thumb)) = (
+                                compute_video_thumbnail_path(&old_file_path, mtime),
+                                compute_video_thumbnail_path(&new_file_path, mtime),
+                            ) {
+                                if old_thumb.exists() && old_thumb != new_thumb {
+                                    let _ = std::fs::rename(&old_thumb, &new_thumb);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            stats.directories_moved += 1;
         }
+    }
+
+    // Also populate dir_path_to_id with existing directories
+    for (path, id) in &db_dirs {
+        dir_path_to_id.insert(path.clone(), *id);
     }
 
     // === Phase 4: Add/update files ===
@@ -636,5 +765,125 @@ mod tests {
         // Sync again - should not re-tag already tagged files
         let stats2 = run_sync(root, false, true).unwrap();
         assert_eq!(stats2.orientation_tagged, 0);
+    }
+
+    #[test]
+    fn test_sync_nested_directories_have_correct_parent_ids() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial structure
+        fs::create_dir_all(root.join("photos")).unwrap();
+        fs::write(root.join("photos/image.jpg"), "data").unwrap();
+
+        // Init
+        run_init(root).unwrap();
+
+        // Add deeply nested directories (simulating a move operation)
+        fs::create_dir_all(root.join("Hongdan/Vol1")).unwrap();
+        fs::create_dir_all(root.join("Hongdan/Vol2")).unwrap();
+        fs::create_dir_all(root.join("Hongdan/Vol3")).unwrap();
+        fs::write(root.join("Hongdan/Vol1/img.jpg"), "data").unwrap();
+        fs::write(root.join("Hongdan/Vol2/img.jpg"), "data").unwrap();
+        fs::write(root.join("Hongdan/Vol3/img.jpg"), "data").unwrap();
+
+        // Sync
+        let stats = run_sync(root, false, false).unwrap();
+        assert_eq!(stats.directories_added, 4); // Hongdan + Vol1 + Vol2 + Vol3
+
+        // Verify parent_id relationships are correct
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+
+        let hongdan = db.get_directory_by_path("Hongdan").unwrap().unwrap();
+        assert_eq!(hongdan.parent_id, None); // Root level
+
+        let vol1 = db.get_directory_by_path("Hongdan/Vol1").unwrap().unwrap();
+        assert_eq!(vol1.parent_id, Some(hongdan.id));
+
+        let vol2 = db.get_directory_by_path("Hongdan/Vol2").unwrap().unwrap();
+        assert_eq!(vol2.parent_id, Some(hongdan.id));
+
+        let vol3 = db.get_directory_by_path("Hongdan/Vol3").unwrap().unwrap();
+        assert_eq!(vol3.parent_id, Some(hongdan.id));
+    }
+
+    #[test]
+    fn test_sync_move_preserves_metadata() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial structure: korean/Hongdan
+        fs::create_dir_all(root.join("korean/Hongdan")).unwrap();
+        fs::write(root.join("korean/Hongdan/image.jpg"), "data").unwrap();
+
+        // Init
+        run_init(root).unwrap();
+
+        // Add rating and tags to the directory
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let hongdan = db.get_directory_by_path("korean/Hongdan").unwrap().unwrap();
+        db.set_directory_rating(hongdan.id, Some(5)).unwrap();
+        db.add_directory_tag(hongdan.id, "favorite").unwrap();
+        db.add_directory_tag(hongdan.id, "kpop").unwrap();
+        drop(db);
+
+        // Move the directory on disk: korean/Hongdan -> artists/Hongdan
+        fs::create_dir_all(root.join("artists")).unwrap();
+        fs::rename(root.join("korean/Hongdan"), root.join("artists/Hongdan")).unwrap();
+
+        // Sync
+        let stats = run_sync(root, false, false).unwrap();
+
+        // Should detect the move
+        assert_eq!(stats.directories_moved, 1);
+        assert_eq!(stats.directories_added, 2); // artists + artists/Hongdan
+        assert_eq!(stats.directories_removed, 1); // korean/Hongdan
+
+        // Verify metadata was preserved
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let new_hongdan = db.get_directory_by_path("artists/Hongdan").unwrap().unwrap();
+        assert_eq!(new_hongdan.rating, Some(5));
+
+        let tags = db.get_directory_tags(new_hongdan.id).unwrap();
+        assert!(tags.contains(&"favorite".to_string()));
+        assert!(tags.contains(&"kpop".to_string()));
+    }
+
+    #[test]
+    fn test_sync_move_ambiguous_no_transfer() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create initial structure with two directories of the same name
+        fs::create_dir_all(root.join("a/Photos")).unwrap();
+        fs::create_dir_all(root.join("b/Photos")).unwrap();
+        fs::write(root.join("a/Photos/img.jpg"), "data").unwrap();
+        fs::write(root.join("b/Photos/img.jpg"), "data").unwrap();
+
+        // Init
+        run_init(root).unwrap();
+
+        // Add rating to a/Photos
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let photos_a = db.get_directory_by_path("a/Photos").unwrap().unwrap();
+        db.set_directory_rating(photos_a.id, Some(5)).unwrap();
+        drop(db);
+
+        // Move both directories to new locations
+        fs::create_dir_all(root.join("c")).unwrap();
+        fs::create_dir_all(root.join("d")).unwrap();
+        fs::rename(root.join("a/Photos"), root.join("c/Photos")).unwrap();
+        fs::rename(root.join("b/Photos"), root.join("d/Photos")).unwrap();
+
+        // Sync - should NOT transfer metadata due to ambiguity
+        let stats = run_sync(root, false, false).unwrap();
+        assert_eq!(stats.directories_moved, 0); // Ambiguous, no transfer
+
+        // Verify metadata was NOT transferred (both should have no rating)
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let photos_c = db.get_directory_by_path("c/Photos").unwrap().unwrap();
+        let photos_d = db.get_directory_by_path("d/Photos").unwrap().unwrap();
+        assert_eq!(photos_c.rating, None);
+        assert_eq!(photos_d.rating, None);
     }
 }

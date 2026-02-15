@@ -12,9 +12,10 @@ pub use directory_tree::render_directory_tree;
 pub use file_list::render_file_list;
 pub use filter_dialog::render_filter_dialog;
 pub use preview::{
-    collect_preview_images_standalone, generate_dir_preview, generate_dir_preview_from_paths,
-    generate_image_thumbnail, generate_video_thumbnail, has_dir_preview, has_thumbnail,
-    is_image_file, is_video_file, render_preview, TempPreviewState,
+    collect_preview_images_standalone, compute_thumbnail_path, compute_video_thumbnail_path,
+    generate_dir_preview, generate_dir_preview_from_paths, generate_image_thumbnail,
+    generate_video_thumbnail, has_dir_preview, has_thumbnail, is_image_file, is_video_file,
+    render_preview, TempPreviewState,
 };
 pub use rename_dialog::render_rename_dialog;
 pub use status_bar::render_status_bar;

@@ -198,6 +198,44 @@ impl Database {
         Ok((count, size))
     }
 
+    /// Repair parent_id values based on path strings.
+    /// Returns the number of directories fixed.
+    pub fn repair_directory_parents(&self) -> Result<usize> {
+        let all_dirs = self.get_all_directories()?;
+
+        // Build path -> id mapping
+        let path_to_id: std::collections::HashMap<&str, i64> = all_dirs
+            .iter()
+            .map(|d| (d.path.as_str(), d.id))
+            .collect();
+
+        let mut fixed = 0;
+
+        for dir in &all_dirs {
+            // Derive expected parent path from this directory's path
+            let expected_parent_path = std::path::Path::new(&dir.path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .filter(|s| !s.is_empty());
+
+            // Get expected parent_id
+            let expected_parent_id = expected_parent_path
+                .as_ref()
+                .and_then(|p| path_to_id.get(p.as_str()).copied());
+
+            // Check if current parent_id matches expected
+            if dir.parent_id != expected_parent_id {
+                self.connection().execute(
+                    "UPDATE directories SET parent_id = ?1 WHERE id = ?2",
+                    rusqlite::params![expected_parent_id, dir.id],
+                )?;
+                fixed += 1;
+            }
+        }
+
+        Ok(fixed)
+    }
+
     /// Get all directories
     pub fn get_all_directories(&self) -> Result<Vec<Directory>> {
         let mut stmt = self.connection().prepare(
@@ -1163,5 +1201,46 @@ mod tests {
         assert!(result.contains(&photos_id));   // ancestor
         assert!(result.contains(&root_id));     // ancestor
         // photos_id is only included as ancestor (file1 has rating 3 < 4)
+    }
+
+    #[test]
+    fn test_repair_directory_parents() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Insert directories with correct paths but wrong parent_ids
+        let hongdan_id = db.insert_directory("Hongdan", None, None).unwrap();
+        // Intentionally insert with wrong parent_id (None instead of hongdan_id)
+        let vol1_id = db.insert_directory("Hongdan/Vol1", None, None).unwrap();
+        let vol2_id = db.insert_directory("Hongdan/Vol2", None, None).unwrap();
+        // This one has correct parent_id
+        let vol3_id = db.insert_directory("Hongdan/Vol3", Some(hongdan_id), None).unwrap();
+
+        // Verify initial state - Vol1 and Vol2 have wrong parent_id
+        let vol1 = db.get_directory(vol1_id).unwrap().unwrap();
+        assert_eq!(vol1.parent_id, None); // Wrong!
+
+        let vol2 = db.get_directory(vol2_id).unwrap().unwrap();
+        assert_eq!(vol2.parent_id, None); // Wrong!
+
+        // Run repair
+        let fixed = db.repair_directory_parents().unwrap();
+        assert_eq!(fixed, 2); // Vol1 and Vol2 should be fixed
+
+        // Verify parent_ids are now correct
+        let hongdan = db.get_directory(hongdan_id).unwrap().unwrap();
+        assert_eq!(hongdan.parent_id, None); // Correct - root level
+
+        let vol1 = db.get_directory(vol1_id).unwrap().unwrap();
+        assert_eq!(vol1.parent_id, Some(hongdan_id)); // Fixed!
+
+        let vol2 = db.get_directory(vol2_id).unwrap().unwrap();
+        assert_eq!(vol2.parent_id, Some(hongdan_id)); // Fixed!
+
+        let vol3 = db.get_directory(vol3_id).unwrap().unwrap();
+        assert_eq!(vol3.parent_id, Some(hongdan_id)); // Was already correct
+
+        // Run repair again - should fix 0 since all are correct now
+        let fixed = db.repair_directory_parents().unwrap();
+        assert_eq!(fixed, 0);
     }
 }
