@@ -6,7 +6,8 @@ use ratatui::{
 
 use super::state::AppState;
 use super::widgets::{
-    render_directory_tree, render_file_list, render_preview, render_status_bar, render_tag_popup,
+    render_details_panel, render_directory_tree, render_file_list, render_preview,
+    render_status_bar, render_tag_popup,
 };
 
 /// Main render function
@@ -22,23 +23,37 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let content_area = main_chunks[0];
     let status_area = main_chunks[1];
 
-    // 3-column layout: tree | file list | preview (largest)
+    // Split content: left section (tree + files + details) | preview
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(15),
-            Constraint::Percentage(20),
-            Constraint::Percentage(65),
-        ])
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(content_area);
 
-    let tree_area = content_chunks[0];
-    let file_list_area = content_chunks[1];
-    let preview_area = content_chunks[2];
+    let left_section = content_chunks[0];
+    let preview_area = content_chunks[1];
+
+    // Split left section: tree+files area | details panel (4 lines)
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(5)])
+        .split(left_section);
+
+    let tree_files_area = left_chunks[0];
+    let details_area = left_chunks[1];
+
+    // Split tree+files area: tree | file list (keep ~43%/57% ratio)
+    let tree_files_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(43), Constraint::Percentage(57)])
+        .split(tree_files_area);
+
+    let tree_area = tree_files_chunks[0];
+    let file_list_area = tree_files_chunks[1];
 
     // Render widgets
     render_directory_tree(frame, tree_area, state);
     render_file_list(frame, file_list_area, state);
+    render_details_panel(frame, details_area, state);
     render_preview(frame, preview_area, state);
     render_status_bar(frame, status_area, state);
 
