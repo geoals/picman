@@ -8,7 +8,7 @@ use super::state::AppState;
 use super::widgets::{render_directory_tree, render_file_list, render_preview, render_status_bar};
 
 /// Main render function
-pub fn render(frame: &mut Frame, state: &AppState) {
+pub fn render(frame: &mut Frame, state: &mut AppState) {
     let size = frame.area();
 
     // Main layout: status bar at bottom, content above

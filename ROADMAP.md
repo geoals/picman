@@ -2,20 +2,17 @@
 
 ## Implemented
 
+### Phase 1: Foundation
 - [x] Database schema (directories, files, tags)
 - [x] Init command (scan filesystem, populate DB)
 - [x] Transaction-based bulk inserts (fast init)
 
-## In Progress
-
-- [ ] Sync command (detect filesystem changes)
-
-## Planned (Core)
-
 ### Phase 2: Core Operations
-- [ ] Sync command with change detection (added/removed/modified)
-- [ ] Hash computation (xxHash, parallel, resumable)
-- [ ] CLI commands: list, rate, tag
+- [x] Sync command with change detection (added/removed/modified)
+- [x] Hash computation (xxHash, streaming, resumable)
+- [x] CLI commands: list, rate, tag (1-5 star ratings)
+
+## In Progress
 
 ### Phase 3: Basic TUI
 - [ ] App shell with event loop
@@ -23,8 +20,10 @@
 - [ ] Inline image preview (Kitty graphics protocol)
 - [ ] Vim-style keyboard navigation
 
+## Planned (Core)
+
 ### Phase 4: TUI Actions
-- [ ] Rating in TUI (0-9 keys)
+- [ ] Rating in TUI (1-5 keys)
 - [ ] Tagging in TUI
 - [ ] Filtering by rating/tag
 

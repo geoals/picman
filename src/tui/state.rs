@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use ratatui::widgets::TableState;
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::db::{Database, Directory, File};
@@ -100,6 +101,7 @@ impl TreeState {
 pub struct FileListState {
     pub files: Vec<FileWithTags>,
     pub selected_index: usize,
+    pub table_state: TableState,
 }
 
 impl FileListState {
@@ -107,6 +109,7 @@ impl FileListState {
         Self {
             files: Vec::new(),
             selected_index: 0,
+            table_state: TableState::default().with_selected(Some(0)),
         }
     }
 
@@ -152,6 +155,7 @@ impl AppState {
     fn load_files_for_selected_directory(&mut self) -> Result<()> {
         self.file_list.files.clear();
         self.file_list.selected_index = 0;
+        self.file_list.table_state.select(Some(0));
 
         if let Some(dir) = self.tree.selected_directory() {
             let files = self.db.get_files_in_directory(dir.id)?;
@@ -178,6 +182,7 @@ impl AppState {
                     && self.file_list.selected_index < self.file_list.files.len() - 1
                 {
                     self.file_list.selected_index += 1;
+                    self.file_list.table_state.select(Some(self.file_list.selected_index));
                 }
             }
         }
@@ -195,6 +200,7 @@ impl AppState {
             Focus::FileList => {
                 if self.file_list.selected_index > 0 {
                     self.file_list.selected_index -= 1;
+                    self.file_list.table_state.select(Some(self.file_list.selected_index));
                 }
             }
         }
@@ -254,9 +260,21 @@ impl AppState {
     pub fn select(&mut self) -> Result<()> {
         match self.focus {
             Focus::DirectoryTree => {
-                // Load files for selected directory and move to file list
-                self.load_files_for_selected_directory()?;
-                self.focus = Focus::FileList;
+                if let Some(dir) = self.tree.selected_directory().cloned() {
+                    if self.tree.has_children(dir.id) {
+                        // Directory has children - expand if needed and select first child
+                        if !self.tree.expanded.contains(&dir.id) {
+                            self.tree.expanded.insert(dir.id);
+                        }
+                        // Move to first child
+                        self.tree.selected_index += 1;
+                        self.load_files_for_selected_directory()?;
+                    } else {
+                        // Leaf directory - load files and move to file list
+                        self.load_files_for_selected_directory()?;
+                        self.focus = Focus::FileList;
+                    }
+                }
             }
             Focus::FileList => {
                 // Preview is automatic based on selection

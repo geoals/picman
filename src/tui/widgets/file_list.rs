@@ -6,15 +6,14 @@ use ratatui::{
 
 use crate::tui::state::{AppState, Focus};
 
-pub fn render_file_list(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let is_focused = state.focus == Focus::FileList;
 
     let rows: Vec<Row> = state
         .file_list
         .files
         .iter()
-        .enumerate()
-        .map(|(idx, file_with_tags)| {
+        .map(|file_with_tags| {
             let file = &file_with_tags.file;
 
             // Format rating as stars
@@ -33,23 +32,12 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &AppState) {
             // Format file size
             let size = format_size(file.size);
 
-            let style = if idx == state.file_list.selected_index {
-                if is_focused {
-                    Style::default().bg(Color::Cyan).fg(Color::Black)
-                } else {
-                    Style::default().bg(Color::Gray).fg(Color::Black)
-                }
-            } else {
-                Style::default()
-            };
-
             Row::new(vec![
                 file.filename.clone(),
                 rating,
                 tags,
                 size,
             ])
-            .style(style)
         })
         .collect();
 
@@ -73,6 +61,12 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let file_count = state.file_list.files.len();
     let title = format!(" Files ({}) ", file_count);
 
+    let highlight_style = if is_focused {
+        Style::default().bg(Color::Cyan).fg(Color::Black)
+    } else {
+        Style::default().bg(Color::Gray).fg(Color::Black)
+    };
+
     let table = Table::new(rows, widths)
         .header(header)
         .block(
@@ -80,9 +74,10 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &AppState) {
                 .borders(Borders::ALL)
                 .border_style(border_style)
                 .title(title),
-        );
+        )
+        .row_highlight_style(highlight_style);
 
-    frame.render_widget(table, area);
+    frame.render_stateful_widget(table, area, &mut state.file_list.table_state);
 }
 
 fn format_size(bytes: i64) -> String {
