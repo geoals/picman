@@ -543,6 +543,107 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    // ==================== Filter Operations ====================
+
+    /// Get IDs of directories containing files that match the filter criteria.
+    /// Also includes ancestor directories to maintain tree structure.
+    /// For multiple tags, uses AND logic (file must have ALL tags).
+    pub fn get_directories_with_matching_files(
+        &self,
+        min_rating: Option<i32>,
+        tags: &[String],
+    ) -> Result<std::collections::HashSet<i64>> {
+        use std::collections::HashSet;
+
+        let mut matching_dir_ids: HashSet<i64> = HashSet::new();
+
+        if tags.is_empty() && min_rating.is_none() {
+            // No filter - return empty set (caller should show all)
+            return Ok(matching_dir_ids);
+        }
+
+        // Build query based on filter criteria
+        let query = if tags.is_empty() {
+            // Only rating filter
+            format!(
+                "SELECT DISTINCT f.directory_id
+                 FROM files f
+                 WHERE f.rating >= ?1"
+            )
+        } else if min_rating.is_none() {
+            // Only tag filter (AND logic)
+            format!(
+                "SELECT DISTINCT f.directory_id
+                 FROM files f
+                 WHERE (
+                     SELECT COUNT(DISTINCT t.name)
+                     FROM file_tags ft
+                     JOIN tags t ON ft.tag_id = t.id
+                     WHERE ft.file_id = f.id AND t.name IN ({})
+                 ) = ?1",
+                (0..tags.len()).map(|i| format!("?{}", i + 2)).collect::<Vec<_>>().join(",")
+            )
+        } else {
+            // Both rating and tag filter
+            format!(
+                "SELECT DISTINCT f.directory_id
+                 FROM files f
+                 WHERE f.rating >= ?1 AND (
+                     SELECT COUNT(DISTINCT t.name)
+                     FROM file_tags ft
+                     JOIN tags t ON ft.tag_id = t.id
+                     WHERE ft.file_id = f.id AND t.name IN ({})
+                 ) = ?2",
+                (0..tags.len()).map(|i| format!("?{}", i + 3)).collect::<Vec<_>>().join(",")
+            )
+        };
+
+        let mut stmt = self.connection().prepare(&query)?;
+
+        // Execute with appropriate parameters
+        let dir_ids: Vec<i64> = if tags.is_empty() {
+            stmt.query_map([min_rating.unwrap()], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        } else if min_rating.is_none() {
+            let tag_count = tags.len() as i64;
+            let mut params: Vec<rusqlite::types::Value> = vec![tag_count.into()];
+            params.extend(tags.iter().map(|t| t.clone().into()));
+            stmt.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let rating = min_rating.unwrap();
+            let tag_count = tags.len() as i64;
+            let mut params: Vec<rusqlite::types::Value> = vec![rating.into(), tag_count.into()];
+            params.extend(tags.iter().map(|t| t.clone().into()));
+            stmt.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        matching_dir_ids.extend(dir_ids.iter());
+
+        // Include ancestor directories to maintain tree structure
+        let all_dirs = self.get_all_directories()?;
+        let mut ancestors_to_add: HashSet<i64> = HashSet::new();
+
+        for &dir_id in &matching_dir_ids {
+            let mut current_id = dir_id;
+            while let Some(dir) = all_dirs.iter().find(|d| d.id == current_id) {
+                if let Some(parent_id) = dir.parent_id {
+                    if !matching_dir_ids.contains(&parent_id) {
+                        ancestors_to_add.insert(parent_id);
+                    }
+                    current_id = parent_id;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        matching_dir_ids.extend(ancestors_to_add);
+
+        Ok(matching_dir_ids)
+    }
+
     // ==================== Hash Operations ====================
 
     /// Get all files that need hashing (where hash IS NULL)
@@ -913,5 +1014,67 @@ mod tests {
             .collect();
         assert!(file_paths.contains(&("image1.jpg", "photos")));
         assert!(file_paths.contains(&("beach.jpg", "photos/vacation")));
+    }
+
+    #[test]
+    fn test_get_directories_with_matching_files() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory structure: root -> photos -> vacation
+        let root_id = db.insert_directory("", None, None).unwrap();
+        let photos_id = db.insert_directory("photos", Some(root_id), None).unwrap();
+        let vacation_id = db.insert_directory("photos/vacation", Some(photos_id), None).unwrap();
+        let work_id = db.insert_directory("work", Some(root_id), None).unwrap();
+
+        // Add files with different ratings and tags
+        let file1_id = db.insert_file(photos_id, "photo1.jpg", 1024, 12345, Some("image")).unwrap();
+        let file2_id = db.insert_file(vacation_id, "beach.jpg", 1024, 12346, Some("image")).unwrap();
+        let file3_id = db.insert_file(work_id, "doc.jpg", 1024, 12347, Some("image")).unwrap();
+
+        db.set_file_rating(file1_id, Some(3)).unwrap();
+        db.set_file_rating(file2_id, Some(5)).unwrap();
+        db.set_file_rating(file3_id, Some(2)).unwrap();
+
+        db.add_file_tag(file1_id, "family").unwrap();
+        db.add_file_tag(file2_id, "family").unwrap();
+        db.add_file_tag(file2_id, "vacation").unwrap();
+
+        // No filter returns empty set
+        let result = db.get_directories_with_matching_files(None, &[]).unwrap();
+        assert!(result.is_empty());
+
+        // Rating filter only
+        let result = db.get_directories_with_matching_files(Some(4), &[]).unwrap();
+        assert!(result.contains(&vacation_id)); // file2 has rating 5
+        assert!(result.contains(&photos_id));   // ancestor of vacation
+        assert!(result.contains(&root_id));     // ancestor of photos
+        assert!(!result.contains(&work_id));    // file3 has rating 2
+
+        // Tag filter only (single tag)
+        let result = db.get_directories_with_matching_files(None, &["family".to_string()]).unwrap();
+        assert!(result.contains(&photos_id));   // file1 has "family" tag
+        assert!(result.contains(&vacation_id)); // file2 has "family" tag
+        assert!(result.contains(&root_id));     // ancestor
+        assert!(!result.contains(&work_id));    // no matching files
+
+        // Tag filter only (multiple tags - AND logic)
+        let result = db.get_directories_with_matching_files(
+            None,
+            &["family".to_string(), "vacation".to_string()]
+        ).unwrap();
+        assert!(result.contains(&vacation_id)); // file2 has both tags
+        assert!(result.contains(&photos_id));   // ancestor
+        assert!(result.contains(&root_id));     // ancestor
+        assert!(!result.contains(&photos_id) || result.len() >= 3); // photos_id is included as ancestor
+
+        // Combined rating and tag filter
+        let result = db.get_directories_with_matching_files(
+            Some(4),
+            &["family".to_string()]
+        ).unwrap();
+        assert!(result.contains(&vacation_id)); // file2 has rating 5 and "family" tag
+        assert!(result.contains(&photos_id));   // ancestor
+        assert!(result.contains(&root_id));     // ancestor
+        // photos_id is only included as ancestor (file1 has rating 3 < 4)
     }
 }

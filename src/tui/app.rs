@@ -82,6 +82,33 @@ fn run_app(
 
 /// Handle a key press. Returns true if the app should quit.
 fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
+    // Handle filter dialog if active
+    if state.filter_dialog.is_some() {
+        match code {
+            KeyCode::Esc => state.close_filter_dialog(),
+            KeyCode::Enter => {
+                if state.filter_dialog_enter()? {
+                    state.apply_filter()?;
+                }
+            }
+            KeyCode::Tab => state.filter_dialog_toggle_focus(),
+            KeyCode::Up => state.filter_dialog_up(),
+            KeyCode::Down => state.filter_dialog_down(),
+            KeyCode::Left => state.filter_dialog_left(),
+            KeyCode::Right => state.filter_dialog_right(),
+            KeyCode::Backspace => state.filter_dialog_backspace(),
+            KeyCode::Char('0') => state.clear_filter()?,
+            KeyCode::Char('1') | KeyCode::Char('a') => state.filter_dialog_set_rating(1),
+            KeyCode::Char('2') | KeyCode::Char('s') => state.filter_dialog_set_rating(2),
+            KeyCode::Char('3') | KeyCode::Char('d') => state.filter_dialog_set_rating(3),
+            KeyCode::Char('4') | KeyCode::Char('f') => state.filter_dialog_set_rating(4),
+            KeyCode::Char('5') | KeyCode::Char('g') => state.filter_dialog_set_rating(5),
+            KeyCode::Char(c) => state.filter_dialog_char(c),
+            _ => {}
+        }
+        return Ok(false);
+    }
+
     // Handle tag input popup if active
     if state.tag_input.is_some() {
         match code {
@@ -105,13 +132,14 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
         KeyCode::Char('l') | KeyCode::Right => state.move_right(),
         KeyCode::Tab => state.toggle_focus(),
         KeyCode::Enter => state.select()?,
-        KeyCode::Char('1') => state.set_rating(Some(1))?,
-        KeyCode::Char('2') => state.set_rating(Some(2))?,
-        KeyCode::Char('3') => state.set_rating(Some(3))?,
-        KeyCode::Char('4') => state.set_rating(Some(4))?,
-        KeyCode::Char('5') => state.set_rating(Some(5))?,
+        KeyCode::Char('1') | KeyCode::Char('a') => state.set_rating(Some(1))?,
+        KeyCode::Char('2') | KeyCode::Char('s') => state.set_rating(Some(2))?,
+        KeyCode::Char('3') | KeyCode::Char('d') => state.set_rating(Some(3))?,
+        KeyCode::Char('4') | KeyCode::Char('f') => state.set_rating(Some(4))?,
+        KeyCode::Char('5') | KeyCode::Char('g') => state.set_rating(Some(5))?,
         KeyCode::Char('0') => state.set_rating(None)?,
         KeyCode::Char('t') => state.open_tag_input()?,
+        KeyCode::Char('m') => state.open_filter_dialog()?,
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}
     }

@@ -16,6 +16,18 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     parts.push(format!("[{}]", focus_str));
 
+    // Filter indicator
+    if state.filter.is_active() {
+        let mut filter_parts = Vec::new();
+        if let Some(r) = state.filter.min_rating {
+            filter_parts.push(format!("{}+", r));
+        }
+        for t in &state.filter.tags {
+            filter_parts.push(format!("#{}", t));
+        }
+        parts.push(format!("[Filter: {}]", filter_parts.join(" ")));
+    }
+
     // Selected file info
     if let Some(file_with_tags) = state.file_list.selected_file() {
         let file = &file_with_tags.file;
@@ -31,7 +43,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Keybinding hints
-    let hints = "j/k:move  1-5:rate  t:tag  ?:help  q:quit";
+    let hints = "j/k:move  m:filter  t:tag  ?:help  q:quit";
 
     let left_part = parts.join(" | ");
     let status_text = format!("{:width$}{}", left_part, hints, width = area.width as usize - hints.len());

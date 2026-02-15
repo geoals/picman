@@ -9,7 +9,7 @@ use crate::tui::state::{AppState, Focus};
 pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
     let is_focused = state.focus == Focus::DirectoryTree;
 
-    let visible_dirs = state.tree.visible_directories();
+    let visible_dirs = state.get_visible_directories();
 
     let items: Vec<ListItem> = visible_dirs
         .iter()
@@ -18,7 +18,7 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &AppState) {
             let depth = state.tree.depth(dir);
             let indent = "  ".repeat(depth);
 
-            let icon = if state.tree.has_children(dir.id) {
+            let icon = if state.tree.has_visible_children(dir.id, &state.matching_dir_ids) {
                 if state.tree.expanded.contains(&dir.id) {
                     "▼ "
                 } else {

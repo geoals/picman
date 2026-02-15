@@ -22,9 +22,9 @@
 - [x] Wrap-around navigation
 
 ### Phase 4: TUI Actions
-- [x] Rating in TUI (1-5 keys, works on files and directories)
+- [x] Rating in TUI (1-5/asdfg keys, works on files and directories)
 - [x] Tagging in TUI (t key, popup with autocomplete)
-- [ ] Filtering by rating/tag
+- [x] Filtering by rating/tag (m key, AND logic for multiple tags)
 
 ## Planned (Core)
 

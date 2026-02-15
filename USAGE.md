@@ -17,9 +17,10 @@ picman /path/to/library
 | `l` / `→` | Expand directory / Move to right pane |
 | `Tab` | Switch focus between panes |
 | `Enter` | Select directory (expands and enters first child) |
-| `1-5` | Set rating (works on files and directories) |
+| `1-5` / `a-g` | Set rating (works on files and directories) |
 | `0` | Clear rating |
 | `t` | Add tag (opens popup with autocomplete) |
+| `m` | Filter by rating/tags |
 | `?` | Toggle help overlay |
 | `q` | Quit |
 
@@ -30,6 +31,20 @@ When adding a tag (`t`):
 - `↑` / `↓` to navigate suggestions
 - `Enter` to apply selected/typed tag
 - `Esc` to cancel
+
+### Filter Popup
+
+When filtering (`m`):
+- `Tab` to switch between Rating and Tag sections
+- `←` / `→` or `1-5` / `a-g` to select minimum rating (or "Any")
+- Type to filter available tags, `↑` / `↓` to navigate
+- `Enter` to add selected tag to filter (multiple tags use AND logic)
+- `Backspace` to remove last added tag (when input is empty)
+- `0` to clear entire filter
+- `Enter` (with no tag selected) to apply filter and close
+- `Esc` to cancel without applying
+
+When a filter is active, the status bar shows: `[Filter: 3+ #tag1 #tag2]`
 
 ## CLI Commands
 

@@ -26,7 +26,7 @@ fn render_file_details(state: &AppState) -> Text<'static> {
     };
 
     let file = &file_with_tags.file;
-    let dir = state.tree.selected_directory();
+    let dir = state.get_selected_directory();
 
     // Build full path
     let full_path = match dir {
@@ -74,7 +74,7 @@ fn render_file_details(state: &AppState) -> Text<'static> {
 }
 
 fn render_directory_details(state: &AppState) -> Text<'static> {
-    let Some(dir) = state.tree.selected_directory() else {
+    let Some(dir) = state.get_selected_directory() else {
         return Text::raw("No directory selected");
     };
 
