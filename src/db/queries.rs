@@ -631,9 +631,10 @@ impl Database {
 
     // ==================== Filter Operations ====================
 
-    /// Get IDs of directories containing files that match the filter criteria.
+    /// Get IDs of directories containing files that match the filter criteria,
+    /// OR directories that themselves have matching tags.
     /// Also includes ancestor directories to maintain tree structure.
-    /// For multiple tags, uses AND logic (file must have ALL tags).
+    /// For multiple tags, uses AND logic (must have ALL tags).
     pub fn get_directories_with_matching_files(
         &self,
         rating_filter: crate::tui::state::RatingFilter,
@@ -650,21 +651,21 @@ impl Database {
             return Ok(matching_dir_ids);
         }
 
-        // Build WHERE clauses
-        let mut conditions = Vec::new();
+        // === Part 1: Find directories with matching FILES ===
+        let mut file_conditions = Vec::new();
 
         if video_only {
-            conditions.push("f.media_type = 'video'".to_string());
+            file_conditions.push("f.media_type = 'video'".to_string());
         }
 
         let min_rating = match rating_filter {
             RatingFilter::Any => None,
             RatingFilter::Unrated => {
-                conditions.push("f.rating IS NULL".to_string());
+                file_conditions.push("f.rating IS NULL".to_string());
                 None
             }
             RatingFilter::MinRating(r) => {
-                conditions.push("f.rating >= ?1".to_string());
+                file_conditions.push("f.rating >= ?1".to_string());
                 Some(r)
             }
         };
@@ -676,39 +677,72 @@ impl Database {
                 .map(|i| format!("?{}", tag_param_start + 1 + i))
                 .collect::<Vec<_>>()
                 .join(",");
-            conditions.push(format!(
+            file_conditions.push(format!(
                 "(SELECT COUNT(DISTINCT t.name) FROM file_tags ft JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id = f.id AND t.name IN ({})) = ?{}",
                 tag_placeholders, tag_count_param
             ));
         }
 
-        let query = format!(
-            "SELECT DISTINCT f.directory_id FROM files f WHERE {}",
-            conditions.join(" AND ")
-        );
+        // Only query files if we have conditions
+        if !file_conditions.is_empty() {
+            let query = format!(
+                "SELECT DISTINCT f.directory_id FROM files f WHERE {}",
+                file_conditions.join(" AND ")
+            );
 
-        let mut stmt = self.connection().prepare(&query)?;
+            let mut stmt = self.connection().prepare(&query)?;
 
-        // Build parameters based on what filters are active
-        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+            // Build parameters based on what filters are active
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
 
-        if let Some(rating) = min_rating {
-            params.push(rating.into());
+            if let Some(rating) = min_rating {
+                params.push(rating.into());
+            }
+
+            if !tags.is_empty() {
+                let tag_count = tags.len() as i64;
+                params.push(tag_count.into());
+                params.extend(tags.iter().map(|t| t.clone().into()));
+            }
+
+            let dir_ids: Vec<i64> = stmt
+                .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            matching_dir_ids.extend(dir_ids.iter());
         }
 
-        if !tags.is_empty() {
-            let tag_count = tags.len() as i64;
-            params.push(tag_count.into());
+        // === Part 2: Find directories with matching DIRECTORY TAGS ===
+        // (Only applies when tag filter is active and not video_only)
+        if !tags.is_empty() && !video_only {
+            let tag_placeholders = (0..tags.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let dir_tag_query = format!(
+                "SELECT DISTINCT d.id FROM directories d
+                 WHERE (SELECT COUNT(DISTINCT t.name) FROM directory_tags dt
+                        JOIN tags t ON dt.tag_id = t.id
+                        WHERE dt.directory_id = d.id AND t.name IN ({})) = ?{}",
+                tag_placeholders,
+                tags.len() + 1
+            );
+
+            let mut stmt = self.connection().prepare(&dir_tag_query)?;
+
+            let mut params: Vec<rusqlite::types::Value> = Vec::new();
             params.extend(tags.iter().map(|t| t.clone().into()));
+            params.push((tags.len() as i64).into());
+
+            let dir_ids: Vec<i64> = stmt
+                .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            matching_dir_ids.extend(dir_ids.iter());
         }
 
-        let dir_ids: Vec<i64> = stmt
-            .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        matching_dir_ids.extend(dir_ids.iter());
-
-        // Include ancestor directories to maintain tree structure
+        // === Part 3: Include ancestor directories to maintain tree structure ===
         let all_dirs = self.get_all_directories()?;
         let mut ancestors_to_add: HashSet<i64> = HashSet::new();
 

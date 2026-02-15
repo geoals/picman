@@ -163,8 +163,14 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
                     state.filter_dialog_focus_down();
                 }
             }
-            KeyCode::Left => state.filter_dialog_left(),
-            KeyCode::Right => state.filter_dialog_right(),
+            KeyCode::Left => {
+                state.filter_dialog_left();
+                state.auto_apply_filter()?;
+            }
+            KeyCode::Right => {
+                state.filter_dialog_right();
+                state.auto_apply_filter()?;
+            }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 match focus {
                     Some(FilterDialogFocus::VideoOnly) => {
