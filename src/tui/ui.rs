@@ -72,21 +72,38 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         render_filter_dialog(frame, size, filter_dialog);
     }
 
-    // Render thumbnail confirmation dialog if active
-    if let Some(ref confirm) = state.thumbnail_confirm {
-        render_thumbnail_confirm(frame, size, confirm);
+    // Render operations menu if active
+    if let Some(ref menu) = state.operations_menu {
+        render_operations_menu(frame, size, menu);
     }
 }
 
-fn render_thumbnail_confirm(frame: &mut Frame, area: Rect, confirm: &super::state::ThumbnailConfirmState) {
-    let text = format!(
-        "Generate thumbnails for {} files\nin directory '{}'?\n\n[Y]es  [N]o",
-        confirm.file_count,
-        if confirm.directory_path.is_empty() { "." } else { &confirm.directory_path }
-    );
+fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::OperationsMenuState) {
+    let dir_name = if menu.directory_path.is_empty() { "." } else { &menu.directory_path };
 
-    let width = 45;
-    let height = 7;
+    let options = [
+        ("1/t", "Thumbnails", "Generate preview thumbnails"),
+        ("2/o", "Orientation", "Tag landscape/portrait"),
+        ("3/h", "Hash", "Compute file hashes"),
+    ];
+
+    let mut lines = vec![
+        format!("Directory: {} ({} files)", dir_name, menu.file_count),
+        String::new(),
+    ];
+
+    for (i, (key, name, desc)) in options.iter().enumerate() {
+        let marker = if i == menu.selected { ">" } else { " " };
+        lines.push(format!("{} [{}] {} - {}", marker, key, name, desc));
+    }
+
+    lines.push(String::new());
+    lines.push("Enter: select  Esc: cancel".to_string());
+
+    let text = lines.join("\n");
+
+    let width = 50;
+    let height = 9;
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
 
@@ -95,8 +112,7 @@ fn render_thumbnail_confirm(frame: &mut Frame, area: Rect, confirm: &super::stat
     frame.render_widget(Clear, dialog_area);
 
     let dialog = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" Generate Thumbnails "))
-        .alignment(Alignment::Center);
+        .block(Block::default().borders(Borders::ALL).title(" Operations "));
 
     frame.render_widget(dialog, dialog_area);
 }
@@ -117,7 +133,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     1-5/asdfg Set rating
     0        Clear rating
     t        Add tag
-    T        Generate thumbnail(s)
+    o        Operations menu
     m        Filter
     p        Play video (mpv)
     ?        Toggle help

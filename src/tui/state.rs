@@ -11,6 +11,36 @@ use ratatui_image::protocol::StatefulProtocol;
 
 use crate::db::{Database, Directory, File};
 
+/// Detect image orientation from EXIF data
+fn detect_orientation(path: &std::path::Path) -> Option<&'static str> {
+    let size = imagesize::size(path).ok()?;
+    let (mut width, mut height) = (size.width, size.height);
+
+    // Check EXIF orientation - values 5-8 involve 90° rotation, swapping dimensions
+    if let Ok(file) = std::fs::File::open(path) {
+        let mut bufreader = std::io::BufReader::new(file);
+        if let Ok(exif) = exif::Reader::new().read_from_container(&mut bufreader) {
+            if let Some(orientation) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+                if let exif::Value::Short(ref vals) = orientation.value {
+                    if let Some(&val) = vals.first() {
+                        if val >= 5 && val <= 8 {
+                            std::mem::swap(&mut width, &mut height);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if width > height {
+        Some("landscape")
+    } else if height > width {
+        Some("portrait")
+    } else {
+        None
+    }
+}
+
 /// Active filter criteria for filtering directories and files
 #[derive(Clone, Default)]
 pub struct FilterCriteria {
@@ -303,17 +333,46 @@ impl FileListState {
     }
 }
 
-/// State for thumbnail generation confirmation dialog
-pub struct ThumbnailConfirmState {
-    pub directory_path: String,
-    pub file_count: usize,
+/// Types of background operations
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OperationType {
+    Thumbnails,
+    Orientation,
+    Hash,
 }
 
-/// Progress tracker for background thumbnail generation
-pub struct ThumbnailProgress {
+impl OperationType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            OperationType::Thumbnails => "Generating thumbnails",
+            OperationType::Orientation => "Tagging orientation",
+            OperationType::Hash => "Computing hashes",
+        }
+    }
+
+    pub fn done_label(&self) -> &'static str {
+        match self {
+            OperationType::Thumbnails => "thumbnails generated",
+            OperationType::Orientation => "files tagged",
+            OperationType::Hash => "files hashed",
+        }
+    }
+}
+
+/// State for operations menu popup
+pub struct OperationsMenuState {
+    pub directory_path: String,
+    pub file_count: usize,
+    pub selected: usize,
+}
+
+/// Progress tracker for background operations
+pub struct BackgroundProgress {
+    pub operation: OperationType,
     pub total: usize,
     pub completed: Arc<AtomicUsize>,
     pub done: Arc<AtomicBool>,
+    pub cancelled: Arc<AtomicBool>,
 }
 
 /// Main application state
@@ -330,12 +389,12 @@ pub struct AppState {
     pub filter: FilterCriteria,
     /// Directory IDs that match the current filter (includes ancestors for tree structure)
     pub matching_dir_ids: HashSet<i64>,
-    /// Confirmation dialog for directory thumbnail generation
-    pub thumbnail_confirm: Option<ThumbnailConfirmState>,
+    /// Operations menu popup
+    pub operations_menu: Option<OperationsMenuState>,
     /// Status message to show temporarily
     pub status_message: Option<String>,
-    /// Background thumbnail generation progress
-    pub thumbnail_progress: Option<ThumbnailProgress>,
+    /// Background operation progress
+    pub background_progress: Option<BackgroundProgress>,
 }
 
 impl AppState {
@@ -355,9 +414,9 @@ impl AppState {
             filter_dialog: None,
             filter: FilterCriteria::default(),
             matching_dir_ids: HashSet::new(),
-            thumbnail_confirm: None,
+            operations_menu: None,
             status_message: None,
-            thumbnail_progress: None,
+            background_progress: None,
         };
 
         // Load files for initial selection
@@ -897,122 +956,269 @@ impl AppState {
         Ok(false)
     }
 
-    // ==================== Thumbnail Methods ====================
+    // ==================== Operations Menu Methods ====================
 
-    /// Handle Shift+T: generate thumbnail for file or show confirm for directory
-    pub fn trigger_thumbnail_generation(&mut self) {
-        use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
+    /// Open the operations menu (triggered by 'o')
+    pub fn open_operations_menu(&mut self) {
+        if let Some(dir) = self.get_selected_directory().cloned() {
+            // Count files recursively
+            let mut dir_ids = vec![dir.id];
+            self.collect_descendant_dir_ids(dir.id, &mut dir_ids);
 
-        match self.focus {
-            Focus::FileList => {
-                // Generate thumbnail for selected file
-                if let Some(path) = self.selected_file_path() {
-                    if is_image_file(&path) {
-                        if generate_image_thumbnail(&path).is_some() {
-                            self.status_message = Some("Thumbnail generated".to_string());
-                            // Clear preview cache to reload
-                            *self.preview_cache.borrow_mut() = None;
-                        } else {
-                            self.status_message = Some("Failed to generate thumbnail".to_string());
-                        }
-                    } else if is_video_file(&path) {
-                        if generate_video_thumbnail(&path).is_some() {
-                            self.status_message = Some("Thumbnail generated".to_string());
-                            *self.preview_cache.borrow_mut() = None;
-                        } else {
-                            self.status_message = Some("Failed to generate thumbnail".to_string());
-                        }
-                    }
+            let mut file_count = 0;
+            for dir_id in &dir_ids {
+                if let Ok(files) = self.db.get_files_in_directory(*dir_id) {
+                    file_count += files.len();
                 }
             }
-            Focus::DirectoryTree => {
-                // Show confirmation dialog for directory
-                if let Some(dir) = self.get_selected_directory() {
-                    let file_count = self.file_list.files.len();
-                    self.thumbnail_confirm = Some(ThumbnailConfirmState {
-                        directory_path: dir.path.clone(),
-                        file_count,
-                    });
-                }
+
+            self.operations_menu = Some(OperationsMenuState {
+                directory_path: dir.path.clone(),
+                file_count,
+                selected: 0,
+            });
+        }
+    }
+
+    /// Close the operations menu
+    pub fn close_operations_menu(&mut self) {
+        self.operations_menu = None;
+    }
+
+    /// Move selection up in operations menu
+    pub fn operations_menu_up(&mut self) {
+        if let Some(ref mut menu) = self.operations_menu {
+            if menu.selected > 0 {
+                menu.selected -= 1;
+            } else {
+                menu.selected = 2; // Wrap to bottom
             }
         }
     }
 
-    /// Confirm and generate thumbnails for all files in current directory
-    pub fn confirm_thumbnail_generation(&mut self) {
-        use crate::tui::widgets::{is_image_file, is_video_file};
+    /// Move selection down in operations menu
+    pub fn operations_menu_down(&mut self) {
+        if let Some(ref mut menu) = self.operations_menu {
+            if menu.selected < 2 {
+                menu.selected += 1;
+            } else {
+                menu.selected = 0; // Wrap to top
+            }
+        }
+    }
 
-        self.thumbnail_confirm = None;
+    /// Recursively collect all descendant directory IDs
+    fn collect_descendant_dir_ids(&self, parent_id: i64, result: &mut Vec<i64>) {
+        for dir in &self.tree.directories {
+            if dir.parent_id == Some(parent_id) {
+                result.push(dir.id);
+                self.collect_descendant_dir_ids(dir.id, result);
+            }
+        }
+    }
 
-        // Collect paths first (need owned data for parallel processing)
-        let dir_path = self.get_selected_directory().map(|d| d.path.clone());
-        let paths: Vec<PathBuf> = self.file_list.files.iter()
-            .filter_map(|file_with_tags| {
-                let dir = dir_path.as_ref()?;
-                let path = if dir.is_empty() {
-                    self.library_path.join(&file_with_tags.file.filename)
-                } else {
-                    self.library_path.join(dir).join(&file_with_tags.file.filename)
-                };
-                // Only include image/video files
-                if is_image_file(&path) || is_video_file(&path) {
-                    Some(path)
-                } else {
-                    None
+    /// Execute the selected operation from menu
+    pub fn operations_menu_select(&mut self) {
+        let operation = if let Some(ref menu) = self.operations_menu {
+            match menu.selected {
+                0 => OperationType::Thumbnails,
+                1 => OperationType::Orientation,
+                2 => OperationType::Hash,
+                _ => return,
+            }
+        } else {
+            return;
+        };
+
+        self.operations_menu = None;
+        self.run_operation(operation);
+    }
+
+    /// Run a background operation on current directory and all subdirectories
+    pub fn run_operation(&mut self, operation: OperationType) {
+        use crate::tui::widgets::{has_thumbnail, is_image_file, is_video_file};
+
+        let selected_dir = match self.get_selected_directory() {
+            Some(d) => d.clone(),
+            None => return,
+        };
+
+        // Collect all directory IDs under selected directory (including itself)
+        let mut dir_ids = vec![selected_dir.id];
+        self.collect_descendant_dir_ids(selected_dir.id, &mut dir_ids);
+
+        let library_path = self.library_path.clone();
+
+        // Collect files from all directories, skipping already-processed ones
+        let mut file_data: Vec<(i64, PathBuf)> = Vec::new();
+        for dir_id in &dir_ids {
+            if let Ok(files) = self.db.get_files_in_directory(*dir_id) {
+                // Get directory path for this dir_id
+                let dir_path = self.tree.directories.iter()
+                    .find(|d| d.id == *dir_id)
+                    .map(|d| d.path.clone())
+                    .unwrap_or_default();
+
+                for file in files {
+                    let path = if dir_path.is_empty() {
+                        library_path.join(&file.filename)
+                    } else {
+                        library_path.join(&dir_path).join(&file.filename)
+                    };
+
+                    // Filter based on operation type and skip already-processed
+                    let include = match operation {
+                        OperationType::Thumbnails => {
+                            (is_image_file(&path) || is_video_file(&path)) && !has_thumbnail(&path)
+                        }
+                        OperationType::Orientation => {
+                            if !is_image_file(&path) {
+                                false
+                            } else {
+                                // Check if already has orientation tag
+                                let tags = self.db.get_file_tags(file.id).unwrap_or_default();
+                                !tags.contains(&"landscape".to_string()) && !tags.contains(&"portrait".to_string())
+                            }
+                        }
+                        OperationType::Hash => file.hash.is_none(),
+                    };
+
+                    if include {
+                        file_data.push((file.id, path));
+                    }
                 }
-            })
-            .collect();
+            }
+        }
 
-        let total = paths.len();
+        let total = file_data.len();
         if total == 0 {
-            self.status_message = Some("No media files to process".to_string());
+            self.status_message = Some("Nothing to do - all files already processed".to_string());
             return;
         }
 
         // Set up progress tracking
         let completed = Arc::new(AtomicUsize::new(0));
         let done = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
-        self.thumbnail_progress = Some(ThumbnailProgress {
+        self.background_progress = Some(BackgroundProgress {
+            operation,
             total,
             completed: Arc::clone(&completed),
             done: Arc::clone(&done),
+            cancelled: Arc::clone(&cancelled),
         });
 
-        // Spawn background thread for parallel generation
+        // Get db path for operations that need it
+        let db_path = self.library_path.join(".picman.db");
+
+        // Spawn background thread for parallel processing
         std::thread::spawn(move || {
-            use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
             use rayon::prelude::*;
 
-            paths.par_iter().for_each(|path| {
-                if is_image_file(path) {
-                    generate_image_thumbnail(path);
-                } else if is_video_file(path) {
-                    generate_video_thumbnail(path);
+            match operation {
+                OperationType::Thumbnails => {
+                    use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
+
+                    file_data.par_iter().for_each(|(_, path)| {
+                        if cancelled.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if is_image_file(path) {
+                            generate_image_thumbnail(path);
+                        } else if is_video_file(path) {
+                            generate_video_thumbnail(path);
+                        }
+                        completed.fetch_add(1, Ordering::Relaxed);
+                    });
                 }
-                completed.fetch_add(1, Ordering::Relaxed);
-            });
+                OperationType::Orientation => {
+                    use crate::db::Database;
+
+                    // Process in parallel, collect results
+                    let results: Vec<_> = file_data.par_iter()
+                        .filter_map(|(file_id, path)| {
+                            if cancelled.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            let orientation = detect_orientation(path);
+                            completed.fetch_add(1, Ordering::Relaxed);
+                            Some((*file_id, orientation))
+                        })
+                        .collect();
+
+                    // Update DB serially (SQLite is not thread-safe)
+                    if !cancelled.load(Ordering::Relaxed) {
+                        if let Ok(db) = Database::open(&db_path) {
+                            for (file_id, orientation) in results {
+                                if let Some(tag) = orientation {
+                                    let _ = db.add_file_tag(file_id, tag);
+                                }
+                            }
+                        }
+                    }
+                }
+                OperationType::Hash => {
+                    use crate::db::Database;
+                    use crate::hash::compute_file_hash;
+
+                    // Process in parallel, collect results
+                    let results: Vec<_> = file_data.par_iter()
+                        .filter_map(|(file_id, path)| {
+                            if cancelled.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            let hash = compute_file_hash(path).ok();
+                            completed.fetch_add(1, Ordering::Relaxed);
+                            Some((*file_id, hash))
+                        })
+                        .collect();
+
+                    // Update DB serially
+                    if !cancelled.load(Ordering::Relaxed) {
+                        if let Ok(db) = Database::open(&db_path) {
+                            for (file_id, hash) in results {
+                                if let Some(h) = hash {
+                                    let _ = db.set_file_hash(file_id, &h);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             done.store(true, Ordering::Relaxed);
         });
     }
 
-    /// Check and update thumbnail generation progress
-    pub fn update_thumbnail_progress(&mut self) {
-        if let Some(ref progress) = self.thumbnail_progress {
-            if progress.done.load(Ordering::Relaxed) {
-                let completed = progress.completed.load(Ordering::Relaxed);
-                self.status_message = Some(format!("Generated {} thumbnails", completed));
-                self.thumbnail_progress = None;
-                // Clear preview cache to reload
-                *self.preview_cache.borrow_mut() = None;
-            }
+    /// Cancel any running background operation
+    pub fn cancel_background_operation(&mut self) {
+        if let Some(ref progress) = self.background_progress {
+            progress.cancelled.store(true, Ordering::Relaxed);
         }
     }
 
-    /// Cancel thumbnail generation dialog
-    pub fn cancel_thumbnail_generation(&mut self) {
-        self.thumbnail_confirm = None;
+    /// Check if a background operation is running
+    pub fn has_background_operation(&self) -> bool {
+        self.background_progress.is_some()
+    }
+
+    /// Check and update background operation progress
+    pub fn update_background_progress(&mut self) {
+        if let Some(ref progress) = self.background_progress {
+            if progress.done.load(Ordering::Relaxed) {
+                let completed = progress.completed.load(Ordering::Relaxed);
+                let was_cancelled = progress.cancelled.load(Ordering::Relaxed);
+                if was_cancelled {
+                    self.status_message = Some(format!("Cancelled - {} {}", completed, progress.operation.done_label()));
+                } else {
+                    self.status_message = Some(format!("{} {}", completed, progress.operation.done_label()));
+                }
+                self.background_progress = None;
+                // Clear preview cache to reload (for thumbnails)
+                *self.preview_cache.borrow_mut() = None;
+            }
+        }
     }
 
     /// Clear status message

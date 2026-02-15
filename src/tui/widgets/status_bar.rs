@@ -9,14 +9,14 @@ use crate::tui::state::{AppState, Focus};
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     use std::sync::atomic::Ordering;
 
-    // Show thumbnail generation progress if active
-    if let Some(ref progress) = state.thumbnail_progress {
+    // Show background operation progress if active
+    if let Some(ref progress) = state.background_progress {
         let completed = progress.completed.load(Ordering::Relaxed);
         let total = progress.total;
         let pct = if total > 0 { completed * 100 / total } else { 0 };
-        let msg = format!("Generating thumbnails: {}/{} ({}%)", completed, total, pct);
+        let msg = format!("{}: {}/{} ({}%)", progress.operation.label(), completed, total, pct);
         let status = Paragraph::new(msg)
-            .style(Style::default().bg(Color::Magenta).fg(Color::White));
+            .style(Style::default().bg(Color::Yellow).fg(Color::Black));
         frame.render_widget(status, area);
         return;
     }
@@ -24,7 +24,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     // Show status message if present
     if let Some(ref msg) = state.status_message {
         let status = Paragraph::new(msg.as_str())
-            .style(Style::default().bg(Color::Blue).fg(Color::White));
+            .style(Style::default().bg(Color::Green).fg(Color::Black));
         frame.render_widget(status, area);
         return;
     }

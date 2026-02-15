@@ -56,14 +56,21 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     state: &mut AppState,
 ) -> Result<()> {
+    let mut cancelling = false;
+
     loop {
-        // Check for thumbnail generation progress
-        state.update_thumbnail_progress();
+        // Check for background operation progress
+        state.update_background_progress();
+
+        // If we were cancelling and operation is done, quit
+        if cancelling && !state.has_background_operation() {
+            return Ok(());
+        }
 
         terminal.draw(|frame| render(frame, state))?;
 
         // Use shorter timeout when background work is happening to update progress
-        let timeout = if state.thumbnail_progress.is_some() {
+        let timeout = if state.background_progress.is_some() {
             Duration::from_millis(100)
         } else {
             Duration::from_secs(1)
@@ -75,6 +82,7 @@ fn run_app(
                 if key.kind == KeyEventKind::Press {
                     match handle_key(key.code, state)? {
                         KeyAction::Quit => return Ok(()),
+                        KeyAction::Cancelling => cancelling = true,
                         KeyAction::Continue => {}
                     }
                 }
@@ -87,6 +95,7 @@ fn run_app(
                 if key.kind == KeyEventKind::Press {
                     match handle_key(key.code, state)? {
                         KeyAction::Quit => return Ok(()),
+                        KeyAction::Cancelling => cancelling = true,
                         KeyAction::Continue => {}
                     }
                 }
@@ -98,6 +107,7 @@ fn run_app(
 enum KeyAction {
     Quit,
     Continue,
+    Cancelling, // Waiting for background operation to cancel
 }
 
 /// Handle a key press. Returns KeyAction indicating what to do next.
@@ -144,11 +154,25 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         return Ok(KeyAction::Continue);
     }
 
-    // Handle thumbnail generation confirmation dialog
-    if state.thumbnail_confirm.is_some() {
+    // Handle operations menu
+    if state.operations_menu.is_some() {
         match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => state.confirm_thumbnail_generation(),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => state.cancel_thumbnail_generation(),
+            KeyCode::Esc => state.close_operations_menu(),
+            KeyCode::Up | KeyCode::Char('k') => state.operations_menu_up(),
+            KeyCode::Down | KeyCode::Char('j') => state.operations_menu_down(),
+            KeyCode::Enter => state.operations_menu_select(),
+            KeyCode::Char('1') | KeyCode::Char('t') => {
+                state.close_operations_menu();
+                state.run_operation(crate::tui::state::OperationType::Thumbnails);
+            }
+            KeyCode::Char('2') | KeyCode::Char('o') => {
+                state.close_operations_menu();
+                state.run_operation(crate::tui::state::OperationType::Orientation);
+            }
+            KeyCode::Char('3') | KeyCode::Char('h') => {
+                state.close_operations_menu();
+                state.run_operation(crate::tui::state::OperationType::Hash);
+            }
             _ => {}
         }
         return Ok(KeyAction::Continue);
@@ -159,7 +183,13 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
 
     // Normal key handling
     match code {
-        KeyCode::Char('q') => return Ok(KeyAction::Quit),
+        KeyCode::Char('q') => {
+            if state.has_background_operation() {
+                state.cancel_background_operation();
+                return Ok(KeyAction::Cancelling);
+            }
+            return Ok(KeyAction::Quit);
+        }
         KeyCode::Char('j') | KeyCode::Down => state.move_down()?,
         KeyCode::Char('k') | KeyCode::Up => state.move_up()?,
         KeyCode::Char('h') | KeyCode::Left => state.move_left(),
@@ -173,7 +203,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('5') | KeyCode::Char('g') => state.set_rating(Some(5))?,
         KeyCode::Char('0') => state.set_rating(None)?,
         KeyCode::Char('t') => state.open_tag_input()?,
-        KeyCode::Char('T') => state.trigger_thumbnail_generation(),
+        KeyCode::Char('o') => state.open_operations_menu(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}

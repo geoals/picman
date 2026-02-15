@@ -51,6 +51,17 @@ fn get_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
     Some(cache_dir.join(format!("{:016x}.jpg", hasher.finish())))
 }
 
+/// Check if a thumbnail exists for a file (image or video)
+pub fn has_thumbnail(path: &Path) -> bool {
+    if is_image_file(path) {
+        get_thumbnail_path(path).map(|p| p.exists()).unwrap_or(false)
+    } else if is_video_file(path) {
+        get_video_thumbnail_path(path).map(|p| p.exists()).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
 /// Get cached thumbnail for an image file (does NOT generate)
 fn get_cached_image_thumbnail(image_path: &Path) -> Option<PathBuf> {
     let mut cache = get_thumbnail_cache().lock().ok()?;
@@ -244,22 +255,15 @@ pub fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    // Determine what to preview: use cached thumbnail (no auto-generation)
-    let preview_path = if is_image_file(&file_path) {
+    // Determine what to preview: use cached thumbnail or fall back to original
+    let (preview_path, is_thumbnail) = if is_image_file(&file_path) {
         match get_cached_image_thumbnail(&file_path) {
-            Some(thumb) => thumb,
-            None => {
-                let info = format!("{}\n\nNo thumbnail.\nPress Shift+T to generate.", file_path.file_name().unwrap_or_default().to_string_lossy());
-                let placeholder = Paragraph::new(info)
-                    .block(block)
-                    .alignment(Alignment::Center);
-                frame.render_widget(placeholder, area);
-                return;
-            }
+            Some(thumb) => (thumb, true),
+            None => (file_path.clone(), false), // Fall back to original image
         }
     } else if is_video_file(&file_path) {
         match get_cached_video_thumbnail(&file_path) {
-            Some(thumb) => thumb,
+            Some(thumb) => (thumb, true),
             None => {
                 let info = format!("{}\n\nNo thumbnail.\nPress Shift+T to generate.", file_path.file_name().unwrap_or_default().to_string_lossy());
                 let placeholder = Paragraph::new(info)
@@ -312,9 +316,15 @@ pub fn render_preview(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         };
 
-        // Load the thumbnail (EXIF orientation already applied during thumbnail generation)
+        // Load the image - apply EXIF orientation only for original files (thumbnails have it baked in)
         let image = match image::open(&preview_path) {
-            Ok(img) => img,
+            Ok(img) => {
+                if is_thumbnail {
+                    img
+                } else {
+                    apply_exif_orientation(&preview_path, img)
+                }
+            }
             Err(_) => {
                 *cache = None;
                 let error = Paragraph::new("Failed to load preview");
