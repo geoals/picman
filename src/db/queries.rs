@@ -714,6 +714,7 @@ impl Database {
 
         // === Part 2: Find directories with matching DIRECTORY TAGS ===
         // (Only applies when tag filter is active and not video_only)
+        let mut dirs_with_matching_tags: Vec<i64> = Vec::new();
         if !tags.is_empty() && !video_only {
             let tag_placeholders = (0..tags.len())
                 .map(|i| format!("?{}", i + 1))
@@ -735,14 +736,32 @@ impl Database {
             params.extend(tags.iter().map(|t| t.clone().into()));
             params.push((tags.len() as i64).into());
 
-            let dir_ids: Vec<i64> = stmt
+            dirs_with_matching_tags = stmt
                 .query_map(rusqlite::params_from_iter(params), |row| row.get(0))?
                 .collect::<Result<Vec<_>, _>>()?;
 
-            matching_dir_ids.extend(dir_ids.iter());
+            matching_dir_ids.extend(dirs_with_matching_tags.iter());
         }
 
-        // === Part 3: Include ancestor directories to maintain tree structure ===
+        // === Part 3: Include ALL DESCENDANTS of directories that have matching tags ===
+        let all_dirs = self.get_all_directories()?;
+        for &tagged_dir_id in &dirs_with_matching_tags {
+            // Find all directories that have this directory as an ancestor
+            for dir in &all_dirs {
+                let mut current_id = dir.parent_id;
+                while let Some(pid) = current_id {
+                    if pid == tagged_dir_id {
+                        matching_dir_ids.insert(dir.id);
+                        break;
+                    }
+                    current_id = all_dirs.iter()
+                        .find(|d| d.id == pid)
+                        .and_then(|d| d.parent_id);
+                }
+            }
+        }
+
+        // === Part 4: Include ancestor directories to maintain tree structure ===
         let all_dirs = self.get_all_directories()?;
         let mut ancestors_to_add: HashSet<i64> = HashSet::new();
 
