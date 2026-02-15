@@ -506,15 +506,13 @@ pub fn generate_dir_preview(state: &AppState, dir: &Directory) -> Option<PathBuf
     Some(cache_path)
 }
 
-/// Standalone version for background thread (uses TempPreviewState)
-pub fn generate_dir_preview_standalone(state: &TempPreviewState, dir: &Directory) -> Option<PathBuf> {
-    let images = collect_preview_images_standalone(state, dir);
-
+/// Generate preview from pre-collected image paths (no DB access - thread-safe)
+pub fn generate_dir_preview_from_paths(dir_id: i64, images: &[PathBuf]) -> Option<PathBuf> {
     if images.is_empty() {
         return None;
     }
 
-    let cache_path = get_dir_preview_path(dir.id)?;
+    let cache_path = get_dir_preview_path(dir_id)?;
 
     // Special case: 1 image - preserve original aspect ratio
     if images.len() == 1 {
@@ -580,8 +578,8 @@ pub fn generate_dir_preview_standalone(state: &TempPreviewState, dir: &Directory
     Some(cache_path)
 }
 
-/// Collect preview images using TempPreviewState
-fn collect_preview_images_standalone(state: &TempPreviewState, dir: &Directory) -> Vec<PathBuf> {
+/// Collect preview images using TempPreviewState (requires DB access)
+pub fn collect_preview_images_standalone(state: &TempPreviewState, dir: &Directory) -> Vec<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 

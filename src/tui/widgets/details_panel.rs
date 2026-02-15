@@ -88,6 +88,15 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
     // Format rating
     let rating = format_rating(dir.rating);
 
+    // Count subdirs from in-memory tree (recursive)
+    let subdir_count = count_subdirs_recursive(&state.tree.directories, dir.id);
+
+    // Get file count and size from DB (recursive)
+    let (file_count, total_size) = state
+        .db
+        .get_directory_stats(dir.id)
+        .unwrap_or((0, 0));
+
     // Get directory tags (query on demand)
     let tags = match state.db.get_directory_tags(dir.id) {
         Ok(t) if t.is_empty() => "none".to_string(),
@@ -97,9 +106,27 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
 
     // Build output lines
     let line1 = format!("{} | {}", path, rating);
-    let line2 = format!("Tags: {}", tags);
+    let line2 = format!(
+        "{} subdirs | {} files | {}",
+        subdir_count,
+        file_count,
+        format_size(total_size)
+    );
+    let line3 = format!("Tags: {}", tags);
 
-    Text::from(vec![Line::from(line1), Line::from(line2)])
+    Text::from(vec![Line::from(line1), Line::from(line2), Line::from(line3)])
+}
+
+/// Count all descendant subdirectories recursively
+fn count_subdirs_recursive(directories: &[crate::db::Directory], parent_id: i64) -> usize {
+    let mut count = 0;
+    for dir in directories {
+        if dir.parent_id == Some(parent_id) {
+            count += 1;
+            count += count_subdirs_recursive(directories, dir.id);
+        }
+    }
+    count
 }
 
 fn format_rating(rating: Option<i32>) -> String {

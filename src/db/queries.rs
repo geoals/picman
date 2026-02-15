@@ -150,6 +150,29 @@ impl Database {
         Ok(())
     }
 
+    /// Get recursive stats for a directory (file count, total size)
+    /// Includes the directory itself and all descendants
+    pub fn get_directory_stats(&self, dir_id: i64) -> Result<(i64, i64)> {
+        // Use recursive CTE to find all descendant directory IDs
+        let mut stmt = self.connection().prepare(
+            "WITH RECURSIVE descendants(id) AS (
+                SELECT ?1
+                UNION ALL
+                SELECT d.id FROM directories d
+                JOIN descendants ON d.parent_id = descendants.id
+            )
+            SELECT COUNT(*), COALESCE(SUM(f.size), 0)
+            FROM files f
+            WHERE f.directory_id IN (SELECT id FROM descendants)",
+        )?;
+
+        let (count, size): (i64, i64) = stmt.query_row([dir_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+
+        Ok((count, size))
+    }
+
     /// Get all directories
     pub fn get_all_directories(&self) -> Result<Vec<Directory>> {
         let mut stmt = self.connection().prepare(

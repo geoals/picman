@@ -1225,7 +1225,8 @@ impl AppState {
     fn run_dir_preview_operation(&mut self, operation: OperationType) {
         use crate::db::Database;
         use crate::tui::widgets::{
-            generate_dir_preview, generate_dir_preview_standalone, TempPreviewState,
+            collect_preview_images_standalone, generate_dir_preview,
+            generate_dir_preview_from_paths, TempPreviewState,
         };
 
         let selected_dir = match self.get_selected_directory() {
@@ -1281,8 +1282,9 @@ impl AppState {
         let all_directories = self.tree.directories.clone();
 
         std::thread::spawn(move || {
-            // We need to create a minimal AppState-like structure for generate_dir_preview
-            // Since it needs access to db and directories, we'll open a new db connection
+            use rayon::prelude::*;
+
+            // Open DB connection for collecting image paths
             let db = match Database::open(&db_path) {
                 Ok(db) => db,
                 Err(_) => {
@@ -1291,20 +1293,29 @@ impl AppState {
                 }
             };
 
-            // Create a temporary state for preview generation
             let temp_state = TempPreviewState {
                 library_path,
                 db,
                 directories: all_directories,
             };
 
-            for dir in &dir_data {
+            // Step 1: Collect all image paths (sequential - needs DB)
+            let preview_data: Vec<(i64, Vec<PathBuf>)> = dir_data
+                .iter()
+                .map(|dir| {
+                    let images = collect_preview_images_standalone(&temp_state, dir);
+                    (dir.id, images)
+                })
+                .collect();
+
+            // Step 2: Generate previews in parallel (no DB needed)
+            preview_data.par_iter().for_each(|(dir_id, images)| {
                 if cancelled.load(Ordering::Relaxed) {
-                    break;
+                    return;
                 }
-                generate_dir_preview_standalone(&temp_state, dir);
+                generate_dir_preview_from_paths(*dir_id, images);
                 completed.fetch_add(1, Ordering::Relaxed);
-            }
+            });
 
             done.store(true, Ordering::Relaxed);
         });
