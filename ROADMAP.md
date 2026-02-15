@@ -35,6 +35,13 @@
 - [x] Background processing with progress bar
 - [x] Graceful cancellation on quit
 
+### Phase 4.6: Directory Management
+- [x] Directory preview generation (composite image from subdirs/files)
+- [x] Directory preview CLI command (`picman previews`)
+- [x] Thumbnail CLI command (`picman thumbnails`)
+- [x] Directory rename with word suggestions from subdirs
+- [x] Filter popup UX improvements (auto-apply, better navigation)
+
 ## Planned (Core)
 
 ### Phase 5: Culling Workflow
@@ -73,7 +80,7 @@
 - [x] EXIF orientation reading (for correct preview/tagging)
 
 ### Organization
-- [ ] Directory reorganization tools (rename with metadata preservation)
+- [x] Directory rename with metadata preservation (r key in TUI)
 - [ ] Batch rename based on patterns
 - [ ] Move/merge duplicate directories
 

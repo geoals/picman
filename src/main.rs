@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use picman::cli::{run_init, run_list, run_rate, run_sync, run_tag, ListOptions, TagOptions};
+use picman::cli::{run_generate_previews, run_generate_thumbnails, run_init, run_list, run_rate, run_sync, run_tag, ListOptions, TagOptions};
 use picman::tui::run_tui;
 use std::path::PathBuf;
 
@@ -92,6 +92,18 @@ enum Commands {
     Export,
     /// Import metadata from sidecar JSON files
     Import,
+    /// Generate directory preview images
+    Previews {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Generate thumbnails for all media files
+    Thumbnails {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -191,6 +203,20 @@ fn main() -> Result<()> {
         Some(Commands::Import) => {
             println!("Importing metadata...");
             // TODO: Implement import
+        }
+        Some(Commands::Previews { path }) => {
+            let stats = run_generate_previews(&path)?;
+            println!(
+                "Done: {} generated, {} skipped (already existed), {} total",
+                stats.generated, stats.skipped, stats.total
+            );
+        }
+        Some(Commands::Thumbnails { path }) => {
+            let stats = run_generate_thumbnails(&path)?;
+            println!(
+                "Done: {} generated, {} skipped, {} failed, {} total",
+                stats.generated, stats.skipped, stats.failed, stats.total
+            );
         }
         None => {
             // Launch TUI

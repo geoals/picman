@@ -20,8 +20,11 @@ picman /path/to/library
 | `1-5` / `a-g` | Set rating (works on files and directories) |
 | `0` | Clear rating |
 | `t` | Add tag (opens popup with autocomplete) |
+| `r` | Rename directory (with word suggestions from subdirs) |
 | `o` | Operations menu (thumbnails, orientation, hash) |
 | `m` | Filter by rating/tags |
+| `p` | Generate directory preview (selected dir only) |
+| `P` | Generate directory previews (recursive) |
 | `?` | Toggle help overlay |
 | `q` | Quit |
 
@@ -62,17 +65,30 @@ When adding a tag (`t`):
 ### Filter Popup
 
 When filtering (`m`):
-- `Tab` to switch between Rating and Tag sections
-- `←` / `→` or `1-5` / `a-g` to select minimum rating (or "Any")
-- `v` to toggle video-only filter
-- Type to filter available tags, `↑` / `↓` to navigate
-- `Enter` to add selected tag to filter (multiple tags use AND logic)
+- `↑` / `↓` or `Tab` to navigate between Rating, Video Only, and Tag sections
+- `←` / `→` or `1-5` / `a-g` to select rating filter: Any, Unrated, or minimum 1-5
+- `v` or `Space`/`Enter` (when on Video Only) to toggle video-only filter
+- Type to filter available tags, `↑` / `↓` to navigate tag list
+- `Enter` or `Space` to add selected tag to filter (multiple tags use AND logic)
 - `Backspace` to remove last added tag (when input is empty)
 - `0` to clear entire filter
-- `Enter` (with no tag selected) to apply filter and close
-- `Esc` to cancel without applying
+- `m` or `Esc` to close (filter auto-applies on every change)
 
 When a filter is active, the status bar shows: `[Filter: video 3+ #tag1 #tag2]`
+
+### Rename Directory
+
+When renaming (`r`, only works when directory is selected):
+- Shows suggested words extracted from subdirectory names and file tags
+- Type to edit the new name
+- `←` / `→` to move cursor
+- `↑` / `↓` to select from suggestions
+- `Tab` to replace name with selected suggestion
+- `Shift+Tab` to append selected suggestion to current name
+- `Enter` to confirm rename
+- `Esc` to cancel
+
+The rename updates both the filesystem and database, preserving the directory ID so cached previews continue to work.
 
 ## CLI Commands
 
@@ -114,6 +130,24 @@ picman tag /path/to/library photos/image.jpg --add portrait --add outdoor
 picman tag /path/to/library photos/image.jpg --remove outdoor
 picman tag /path/to/library photos/image.jpg --list
 ```
+
+### thumbnails
+Generate thumbnails for all media files (images and videos).
+```bash
+picman thumbnails /path/to/library
+```
+- Skips files that already have thumbnails
+- Shows progress for each file
+- Video thumbnails require ffmpeg
+
+### previews
+Generate directory preview images (composite thumbnails shown when browsing directories).
+```bash
+picman previews /path/to/library
+```
+- Skips directories that already have previews
+- Shows progress for each directory
+- Runs faster if thumbnails are generated first (`picman thumbnails` before `picman previews`)
 
 ## Known Limitations
 

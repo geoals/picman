@@ -291,6 +291,11 @@ fn get_cached_dir_preview(dir_id: i64) -> Option<PathBuf> {
     }
 }
 
+/// Check if a directory preview exists (public for CLI)
+pub fn has_dir_preview(dir_id: i64) -> bool {
+    get_cached_dir_preview(dir_id).is_some()
+}
+
 /// Collect up to 12 image paths for directory preview
 /// If dir has subdirs: 1 image from each of up to 12 subdirs (searching recursively)
 /// If no subdirs: up to 12 images from current directory
