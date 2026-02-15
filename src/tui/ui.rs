@@ -5,7 +5,9 @@ use ratatui::{
 };
 
 use super::state::AppState;
-use super::widgets::{render_directory_tree, render_file_list, render_preview, render_status_bar};
+use super::widgets::{
+    render_directory_tree, render_file_list, render_preview, render_status_bar, render_tag_popup,
+};
 
 /// Main render function
 pub fn render(frame: &mut Frame, state: &mut AppState) {
@@ -44,6 +46,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     if state.show_help {
         render_help_overlay(frame, size);
     }
+
+    // Render tag input popup if active
+    if let Some(ref tag_input) = state.tag_input {
+        render_tag_popup(frame, size, tag_input);
+    }
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
@@ -61,6 +68,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     Enter    Select directory
     1-5      Set rating
     0        Clear rating
+    t        Add tag
     ?        Toggle help
     q        Quit
 "#;

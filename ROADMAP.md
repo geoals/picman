@@ -12,20 +12,21 @@
 - [x] Hash computation (xxHash, streaming, resumable)
 - [x] CLI commands: list, rate, tag (1-5 star ratings)
 
-## In Progress
-
 ### Phase 3: Basic TUI
-- [ ] App shell with event loop
-- [ ] Directory browser (tree navigation)
-- [ ] Inline image preview (Kitty graphics protocol)
-- [ ] Vim-style keyboard navigation
-
-## Planned (Core)
+- [x] App shell with event loop
+- [x] Directory browser (tree navigation with expand/collapse)
+- [x] Inline image preview (Kitty graphics protocol)
+- [x] Vim-style keyboard navigation (j/k/h/l)
+- [x] 3-column layout (tree | files | preview)
+- [x] File list with scrolling
+- [x] Wrap-around navigation
 
 ### Phase 4: TUI Actions
-- [ ] Rating in TUI (1-5 keys)
-- [ ] Tagging in TUI
+- [x] Rating in TUI (1-5 keys, works on files and directories)
+- [x] Tagging in TUI (t key, popup with autocomplete)
 - [ ] Filtering by rating/tag
+
+## Planned (Core)
 
 ### Phase 5: Culling Workflow
 - [ ] Culling mode for directories

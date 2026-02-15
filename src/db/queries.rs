@@ -419,6 +419,19 @@ impl Database {
         Ok(tags)
     }
 
+    /// Get all tags in the database
+    pub fn get_all_tags(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .connection()
+            .prepare("SELECT name FROM tags ORDER BY name")?;
+
+        let tags: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(tags)
+    }
+
     // ==================== Query Operations ====================
 
     /// Get a file by its relative path (e.g., "photos/vacation/beach.jpg")

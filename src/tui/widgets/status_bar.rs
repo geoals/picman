@@ -31,7 +31,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Keybinding hints
-    let hints = "j/k:move  Tab:switch  1-5:rate  ?:help  q:quit";
+    let hints = "j/k:move  1-5:rate  t:tag  ?:help  q:quit";
 
     let left_part = parts.join(" | ");
     let status_text = format!("{:width$}{}", left_part, hints, width = area.width as usize - hints.len());

@@ -82,6 +82,21 @@ fn run_app(
 
 /// Handle a key press. Returns true if the app should quit.
 fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
+    // Handle tag input popup if active
+    if state.tag_input.is_some() {
+        match code {
+            KeyCode::Esc => state.close_tag_input(),
+            KeyCode::Enter => state.apply_tag()?,
+            KeyCode::Backspace => state.tag_input_backspace(),
+            KeyCode::Up => state.tag_input_up(),
+            KeyCode::Down => state.tag_input_down(),
+            KeyCode::Char(c) => state.tag_input_char(c),
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    // Normal key handling
     match code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('j') | KeyCode::Down => state.move_down()?,
@@ -96,6 +111,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<bool> {
         KeyCode::Char('4') => state.set_rating(Some(4))?,
         KeyCode::Char('5') => state.set_rating(Some(5))?,
         KeyCode::Char('0') => state.set_rating(None)?,
+        KeyCode::Char('t') => state.open_tag_input()?,
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}
     }

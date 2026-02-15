@@ -1,6 +1,37 @@
-# picman CLI Usage
+# picman Usage
 
-## Commands
+## TUI (Terminal User Interface)
+
+Launch the TUI by running picman with a library path:
+```bash
+picman /path/to/library
+```
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `h` / `←` | Collapse directory / Move to left pane |
+| `l` / `→` | Expand directory / Move to right pane |
+| `Tab` | Switch focus between panes |
+| `Enter` | Select directory (expands and enters first child) |
+| `1-5` | Set rating (works on files and directories) |
+| `0` | Clear rating |
+| `t` | Add tag (opens popup with autocomplete) |
+| `?` | Toggle help overlay |
+| `q` | Quit |
+
+### Tag Popup
+
+When adding a tag (`t`):
+- Type to filter existing tags or create a new one
+- `↑` / `↓` to navigate suggestions
+- `Enter` to apply selected/typed tag
+- `Esc` to cancel
+
+## CLI Commands
 
 ### init
 Initialize a library database.
