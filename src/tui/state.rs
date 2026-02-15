@@ -713,6 +713,16 @@ impl AppState {
 
         if let Some(dir) = self.get_selected_directory() {
             let files = self.db.get_files_in_directory(dir.id)?;
+
+            // Check if this directory itself has all the filter tags
+            // If so, show all files without checking individual file tags
+            let dir_has_all_filter_tags = if !self.filter.tags.is_empty() {
+                let dir_tags = self.db.get_directory_tags(dir.id)?;
+                self.filter.tags.iter().all(|t| dir_tags.contains(t))
+            } else {
+                false
+            };
+
             for file in files {
                 let tags = self.db.get_file_tags(file.id)?;
 
@@ -724,23 +734,26 @@ impl AppState {
                             continue;
                         }
                     }
-                    // Check rating filter
-                    match self.filter.rating {
-                        RatingFilter::Any => {}
-                        RatingFilter::Unrated => {
-                            if file.rating.is_some() {
-                                continue;
+                    // Check rating filter (skip if directory has matching tags)
+                    if !dir_has_all_filter_tags {
+                        match self.filter.rating {
+                            RatingFilter::Any => {}
+                            RatingFilter::Unrated => {
+                                if file.rating.is_some() {
+                                    continue;
+                                }
                             }
-                        }
-                        RatingFilter::MinRating(min) => {
-                            match file.rating {
-                                Some(r) if r >= min => {}
-                                _ => continue,
+                            RatingFilter::MinRating(min) => {
+                                match file.rating {
+                                    Some(r) if r >= min => {}
+                                    _ => continue,
+                                }
                             }
                         }
                     }
                     // Check tag filter (AND logic)
-                    if !self.filter.tags.is_empty() {
+                    // Skip this check if directory itself has all the filter tags
+                    if !self.filter.tags.is_empty() && !dir_has_all_filter_tags {
                         let has_all_tags = self.filter.tags.iter().all(|t| tags.contains(t));
                         if !has_all_tags {
                             continue;
