@@ -505,6 +505,31 @@ impl Database {
         Ok(tags)
     }
 
+    /// Get all directory tags as a map (directory_id -> list of tag names)
+    /// More efficient than calling get_directory_tags for each directory
+    pub fn get_all_directory_tags(&self) -> Result<std::collections::HashMap<i64, Vec<String>>> {
+        use std::collections::HashMap;
+
+        let mut stmt = self.connection().prepare(
+            "SELECT dt.directory_id, t.name FROM directory_tags dt
+             JOIN tags t ON dt.tag_id = t.id
+             ORDER BY dt.directory_id, t.name",
+        )?;
+
+        let mut result: HashMap<i64, Vec<String>> = HashMap::new();
+
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (dir_id, tag_name) = row?;
+            result.entry(dir_id).or_default().push(tag_name);
+        }
+
+        Ok(result)
+    }
+
     /// Get all tags in the database
     pub fn get_all_tags(&self) -> Result<Vec<String>> {
         let mut stmt = self
@@ -717,6 +742,19 @@ impl Database {
         let all_dirs = self.get_all_directories()?;
         let mut dirs_matching_full_filter: Vec<i64> = Vec::new();
 
+        // Build lookup maps for efficient access
+        let dir_parent_map: std::collections::HashMap<i64, Option<i64>> = all_dirs
+            .iter()
+            .map(|d| (d.id, d.parent_id))
+            .collect();
+
+        // Fetch all directory tags in one query (instead of N queries)
+        let all_dir_tags = if !tags.is_empty() && !video_only {
+            self.get_all_directory_tags()?
+        } else {
+            std::collections::HashMap::new()
+        };
+
         if !video_only {
             for dir in &all_dirs {
                 // Check rating filter on directory
@@ -726,11 +764,11 @@ impl Database {
                     RatingFilter::MinRating(min) => dir.rating.map(|r| r >= min).unwrap_or(false),
                 };
 
-                // Check tag filter on directory
+                // Check tag filter on directory (using pre-fetched tags)
                 let dir_matches_tags = if tags.is_empty() {
                     true
                 } else {
-                    let dir_tags = self.get_directory_tags(dir.id)?;
+                    let dir_tags = all_dir_tags.get(&dir.id).map(|v| v.as_slice()).unwrap_or(&[]);
                     tags.iter().all(|t| dir_tags.contains(t))
                 };
 
@@ -743,8 +781,8 @@ impl Database {
         }
 
         // === Part 3: Include ALL DESCENDANTS of directories that match the full filter ===
+        // Use HashMap for O(1) parent lookups instead of O(n)
         for &matching_dir_id in &dirs_matching_full_filter {
-            // Find all directories that have this directory as an ancestor
             for dir in &all_dirs {
                 let mut current_id = dir.parent_id;
                 while let Some(pid) = current_id {
@@ -752,24 +790,27 @@ impl Database {
                         matching_dir_ids.insert(dir.id);
                         break;
                     }
-                    current_id = all_dirs.iter()
-                        .find(|d| d.id == pid)
-                        .and_then(|d| d.parent_id);
+                    current_id = dir_parent_map.get(&pid).copied().flatten();
                 }
             }
         }
 
         // === Part 4: Include ancestor directories to maintain tree structure ===
+        // Use HashMap for O(1) parent lookups
         let mut ancestors_to_add: HashSet<i64> = HashSet::new();
 
-        for &dir_id in &matching_dir_ids {
-            let mut current_id = dir_id;
-            while let Some(dir) = all_dirs.iter().find(|d| d.id == current_id) {
-                if let Some(parent_id) = dir.parent_id {
-                    if !matching_dir_ids.contains(&parent_id) {
-                        ancestors_to_add.insert(parent_id);
+        for &dir_id in matching_dir_ids.clone().iter() {
+            let mut current_id = Some(dir_id);
+            while let Some(id) = current_id {
+                if let Some(&parent_id_opt) = dir_parent_map.get(&id) {
+                    if let Some(parent_id) = parent_id_opt {
+                        if !matching_dir_ids.contains(&parent_id) {
+                            ancestors_to_add.insert(parent_id);
+                        }
+                        current_id = Some(parent_id);
+                    } else {
+                        break;
                     }
-                    current_id = parent_id;
                 } else {
                     break;
                 }
