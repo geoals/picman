@@ -28,43 +28,64 @@ pub fn run_generate_thumbnails(library_path: &Path) -> Result<ThumbnailStats> {
 
     let directories = db.get_all_directories()?;
 
-    // Collect all media files that need thumbnails
-    println!("Scanning for files needing thumbnails...");
-    let mut files_needing_thumbnails: Vec<(String, std::path::PathBuf)> = Vec::new();
+    // Build dir_id -> path lookup
+    let dir_paths: HashMap<i64, String> = directories
+        .iter()
+        .map(|d| (d.id, d.path.clone()))
+        .collect();
 
-    for dir in &directories {
-        let files = db.get_files_in_directory(dir.id)?;
-        for file in files {
-            let path = if dir.path.is_empty() {
+    // Get all files from DB (sequential - SQLite)
+    let all_files = db.get_all_files()?;
+    let total_files = all_files.len();
+
+    // Filter to media files and check thumbnails in parallel
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    spinner.enable_steady_tick(Duration::from_millis(100));
+
+    let checked = AtomicUsize::new(0);
+
+    let files_needing_thumbnails: Vec<(String, std::path::PathBuf)> = all_files
+        .par_iter()
+        .filter_map(|file| {
+            let count = checked.fetch_add(1, Ordering::Relaxed);
+            if count % 500 == 0 {
+                spinner.set_message(format!("Checking files... {}/{}", count, total_files));
+            }
+
+            let dir_path = dir_paths.get(&file.directory_id).map(|s| s.as_str()).unwrap_or("");
+            let path = if dir_path.is_empty() {
                 library_path.join(&file.filename)
             } else {
-                library_path.join(&dir.path).join(&file.filename)
+                library_path.join(dir_path).join(&file.filename)
             };
 
             if (is_image_file(&path) || is_video_file(&path)) && !has_thumbnail(&path) {
-                let display_path = if dir.path.is_empty() {
+                let display_path = if dir_path.is_empty() {
                     file.filename.clone()
                 } else {
-                    format!("{}/{}", dir.path, file.filename)
+                    format!("{}/{}", dir_path, file.filename)
                 };
-                files_needing_thumbnails.push((display_path, path));
+                Some((display_path, path))
+            } else {
+                None
             }
-        }
-    }
+        })
+        .collect();
 
-    let total_files = files_needing_thumbnails.len();
-    let total_in_db: usize = directories
-        .iter()
-        .filter_map(|d| db.get_files_in_directory(d.id).ok())
-        .map(|f| f.len())
-        .sum();
+    spinner.finish_and_clear();
 
-    let skipped = total_in_db - total_files;
+    let needing_count = files_needing_thumbnails.len();
+    let skipped = total_files - needing_count;
 
-    if total_files == 0 {
-        println!("All {} files already have thumbnails.", total_in_db);
+    if needing_count == 0 {
+        println!("All {} files already have thumbnails.", total_files);
         return Ok(ThumbnailStats {
-            total: total_in_db,
+            total: total_files,
             generated: 0,
             skipped,
             failed: 0,
@@ -73,42 +94,51 @@ pub fn run_generate_thumbnails(library_path: &Path) -> Result<ThumbnailStats> {
 
     println!(
         "Generating {} thumbnails ({} already exist)...",
-        total_files, skipped
+        needing_count, skipped
     );
 
-    let mut generated = 0;
-    let mut failed = 0;
+    let progress = ProgressBar::new(needing_count as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("    {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}")
+            .unwrap()
+            .progress_chars("██░"),
+    );
 
-    for (i, (display_path, path)) in files_needing_thumbnails.iter().enumerate() {
-        let proc_count = i + 1;
+    let generated = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
 
-        let result = if is_image_file(path) {
-            generate_image_thumbnail(path).is_some()
-        } else if is_video_file(path) {
-            generate_video_thumbnail(path).is_some()
-        } else {
-            false
-        };
+    files_needing_thumbnails
+        .par_iter()
+        .for_each(|(_display_path, path)| {
+            let result = if is_image_file(path) {
+                generate_image_thumbnail(path).is_some()
+            } else if is_video_file(path) {
+                generate_video_thumbnail(path).is_some()
+            } else {
+                false
+            };
 
-        if result {
-            generated += 1;
-            println!(
-                "    [{}/{}] {} - OK ({} generated)",
-                proc_count, total_files, display_path, generated
-            );
-        } else {
-            failed += 1;
-            println!(
-                "    [{}/{}] {} - FAILED",
-                proc_count, total_files, display_path
-            );
-        }
-    }
+            if result {
+                generated.fetch_add(1, Ordering::Relaxed);
+            } else {
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
 
+            let gen = generated.load(Ordering::Relaxed);
+            let fail = failed.load(Ordering::Relaxed);
+            progress.set_message(format!("{} generated, {} failed", gen, fail));
+            progress.inc(1);
+        });
+
+    progress.finish_and_clear();
+
+    let generated = generated.load(Ordering::Relaxed);
+    let failed = failed.load(Ordering::Relaxed);
     println!("Done: {} generated, {} failed", generated, failed);
 
     Ok(ThumbnailStats {
-        total: total_in_db,
+        total: total_files,
         generated,
         skipped,
         failed,

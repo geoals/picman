@@ -57,6 +57,11 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState
                 spans.push(Span::styled(" 󰋩", Style::default().fg(Color::Red)));
             }
 
+            // Show missing file thumbnail indicator
+            if state.dir_missing_file_thumbnails(dir.id) {
+                spans.push(Span::styled(" 󰐊", Style::default().fg(Color::Yellow)));
+            }
+
             ListItem::new(Line::from(spans))
         })
         .collect();

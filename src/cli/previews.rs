@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 
 use crate::db::Database;
 use crate::tui::widgets::{
@@ -71,30 +73,44 @@ pub fn run_generate_previews(library_path: &Path) -> Result<PreviewStats> {
         .collect();
     println!("  Phase 1 complete: {} directories scanned", preview_data.len());
 
-    // Phase 2: Generate previews sequentially
+    // Phase 2: Generate previews in parallel
     println!("  Phase 2: Generating preview images...");
-    let mut generated = 0;
 
-    for (i, (dir_id, path, images)) in preview_data.iter().enumerate() {
-        let proc_count = i + 1;
+    let progress = ProgressBar::new(to_generate as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("    {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}")
+            .unwrap()
+            .progress_chars("██░"),
+    );
 
-        if images.is_empty() {
-            println!("    [{}/{}] {} (no images)", proc_count, to_generate, path);
-            continue;
+    let generated = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
+
+    preview_data.par_iter().for_each(|(dir_id, _path, images)| {
+        if !images.is_empty() {
+            if generate_dir_preview_from_paths(*dir_id, images).is_some() {
+                generated.fetch_add(1, Ordering::Relaxed);
+            } else {
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        let gen = generated.load(Ordering::Relaxed);
+        let fail = failed.load(Ordering::Relaxed);
+        progress.set_message(format!("{} generated, {} failed", gen, fail));
+        progress.inc(1);
+    });
 
-        let result = if generate_dir_preview_from_paths(*dir_id, images).is_some() {
-            generated += 1;
-            "OK"
-        } else {
-            "FAILED"
-        };
+    progress.finish_and_clear();
 
-        println!("    [{}/{}] {} - {} ({} generated)", proc_count, to_generate, path, result, generated);
-    }
-
-    let final_generated = generated;
-    println!("  Phase 2 complete: {} previews generated", final_generated);
+    let final_generated = generated.load(Ordering::Relaxed);
+    let final_failed = failed.load(Ordering::Relaxed);
+    println!(
+        "  Phase 2 complete: {} generated, {} failed, {} empty",
+        final_generated,
+        final_failed,
+        to_generate - final_generated - final_failed
+    );
 
     Ok(PreviewStats {
         total,
@@ -119,36 +135,41 @@ pub fn run_check_previews(library_path: &Path) -> Result<()> {
     spinner.set_message("Loading directories...");
     let directories = db.get_all_directories()?;
 
-    // Find directories missing previews, grouped by top-level dir
-    let mut missing_by_top_dir: HashMap<String, Vec<String>> = HashMap::new();
+    // Find directories missing previews in parallel
+    let checked = AtomicUsize::new(0);
+    let total = directories.len();
 
-    spinner.set_message("Checking previews...");
-    for (i, dir) in directories.iter().enumerate() {
-        if i % 100 == 0 {
-            spinner.set_message(format!("Checking previews... {}/{}", i, directories.len()));
-        }
-        if !has_dir_preview(dir.id) {
-            // Get top-level directory
-            let top_dir = dir
-                .path
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            let top_dir = if top_dir.is_empty() {
-                "(root)".to_string()
+    spinner.set_message(format!("Checking previews... 0/{}", total));
+
+    let missing_dirs: Vec<(String, String)> = directories
+        .par_iter()
+        .filter_map(|dir| {
+            let count = checked.fetch_add(1, Ordering::Relaxed);
+            if count % 100 == 0 {
+                spinner.set_message(format!("Checking previews... {}/{}", count, total));
+            }
+
+            if !has_dir_preview(dir.id) {
+                let top_dir = dir.path.split('/').next().unwrap_or("").to_string();
+                let top_dir = if top_dir.is_empty() {
+                    "(root)".to_string()
+                } else {
+                    top_dir
+                };
+                Some((top_dir, dir.path.clone()))
             } else {
-                top_dir
-            };
-
-            missing_by_top_dir
-                .entry(top_dir)
-                .or_default()
-                .push(dir.path.clone());
-        }
-    }
+                None
+            }
+        })
+        .collect();
 
     spinner.finish_and_clear();
+
+    // Group by top-level directory
+    let mut missing_by_top_dir: HashMap<String, Vec<String>> = HashMap::new();
+    for (top_dir, path) in missing_dirs {
+        missing_by_top_dir.entry(top_dir).or_default().push(path);
+    }
 
     let total_missing: usize = missing_by_top_dir.values().map(|v| v.len()).sum();
 

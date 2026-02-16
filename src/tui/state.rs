@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use ratatui::widgets::{ListState, TableState};
@@ -557,6 +557,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     /// Background operation progress
     pub background_progress: Option<BackgroundProgress>,
+    /// Directory IDs where files are missing thumbnails (checked in background)
+    pub dirs_missing_file_thumbnails: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl AppState {
@@ -581,10 +583,14 @@ impl AppState {
             operations_menu: None,
             status_message: None,
             background_progress: None,
+            dirs_missing_file_thumbnails: Arc::new(Mutex::new(HashSet::new())),
         };
 
         // Load files for initial selection
         state.load_files_for_selected_directory()?;
+
+        // Start background check for missing file thumbnails
+        state.start_thumbnail_check();
 
         Ok(state)
     }
@@ -1761,6 +1767,7 @@ impl AppState {
             if progress.done.load(Ordering::Relaxed) {
                 let completed = progress.completed.load(Ordering::Relaxed);
                 let was_cancelled = progress.cancelled.load(Ordering::Relaxed);
+                let operation = progress.operation;
                 if was_cancelled {
                     self.status_message = Some(format!("Cancelled - {} {}", completed, progress.operation.done_label()));
                 } else {
@@ -1769,6 +1776,14 @@ impl AppState {
                 self.background_progress = None;
                 // Clear preview cache to reload (for thumbnails)
                 *self.preview_cache.borrow_mut() = None;
+
+                // After thumbnail generation, refresh the missing thumbnails check
+                if operation == OperationType::Thumbnails {
+                    if let Ok(mut set) = self.dirs_missing_file_thumbnails.lock() {
+                        set.clear();
+                    }
+                    self.start_thumbnail_check();
+                }
             }
         }
     }
@@ -1776,6 +1791,66 @@ impl AppState {
     /// Clear status message
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
+    }
+
+    /// Check if a directory is missing file thumbnails
+    pub fn dir_missing_file_thumbnails(&self, dir_id: i64) -> bool {
+        self.dirs_missing_file_thumbnails
+            .lock()
+            .map(|set| set.contains(&dir_id))
+            .unwrap_or(false)
+    }
+
+    /// Start background check for directories with missing file thumbnails
+    /// Checks only the first media file in each directory
+    fn start_thumbnail_check(&self) {
+        use crate::db::Database;
+        use crate::tui::widgets::{has_thumbnail, is_image_file, is_video_file};
+
+        let db_path = self.library_path.join(".picman.db");
+        let library_path = self.library_path.clone();
+        let directories = self.tree.directories.clone();
+        let missing_set = Arc::clone(&self.dirs_missing_file_thumbnails);
+
+        std::thread::spawn(move || {
+            let db = match Database::open(&db_path) {
+                Ok(db) => db,
+                Err(_) => return,
+            };
+
+            for dir in &directories {
+                // Get files in this directory
+                let files = match db.get_files_in_directory(dir.id) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+
+                // Find the first media file (image or video)
+                let first_media = files.iter().find(|f| {
+                    let path = if dir.path.is_empty() {
+                        library_path.join(&f.filename)
+                    } else {
+                        library_path.join(&dir.path).join(&f.filename)
+                    };
+                    is_image_file(&path) || is_video_file(&path)
+                });
+
+                // If there's a media file but it doesn't have a thumbnail, mark as missing
+                if let Some(file) = first_media {
+                    let path = if dir.path.is_empty() {
+                        library_path.join(&file.filename)
+                    } else {
+                        library_path.join(&dir.path).join(&file.filename)
+                    };
+
+                    if !has_thumbnail(&path) {
+                        if let Ok(mut set) = missing_set.lock() {
+                            set.insert(dir.id);
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

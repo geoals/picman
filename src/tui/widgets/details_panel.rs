@@ -160,6 +160,14 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
         )));
     }
 
+    // Add warning for missing file thumbnails
+    if state.dir_missing_file_thumbnails(dir.id) {
+        lines.push(Line::from(Span::styled(
+            "󰐊 Missing file thumbnails",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+
     Text::from(lines)
 }
 
