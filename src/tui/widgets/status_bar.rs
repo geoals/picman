@@ -80,9 +80,19 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             ));
         }
 
+        // Queue count (if any)
+        let queue_len = state.operation_queue.len();
+        if queue_len > 0 {
+            spans.push(Span::raw(" | "));
+            spans.push(Span::styled(
+                format!("+{} queued", queue_len),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+
         // Cancel hint
         spans.push(Span::styled(
-            " [Esc to cancel]",
+            " [Esc]",
             Style::default().fg(Color::DarkGray),
         ));
 

@@ -40,9 +40,20 @@ Background operations in the TUI must provide rich feedback:
 - **Spinner animation** - animated spinner for visual activity indication
 - **Elapsed time** - show how long the operation has been running
 - **ETA** - calculate and display estimated time remaining based on current rate
+- **Queue count** - show number of pending operations if any
 - **Cancel hint** - remind users they can cancel with Esc
 
 Use `BackgroundProgress` struct with `AtomicUsize` counters for thread-safe progress updates. The status bar renders at ~60fps so the spinner animates smoothly.
+
+### Operation Queue
+
+Operations in the TUI run sequentially via `operation_queue`:
+
+- Only one background operation runs at a time
+- Additional operations are queued and run in order
+- Status bar shows "+N queued" when operations are waiting
+- Cancelling (Esc) clears the entire queue
+- Queue ensures predictable resource usage and avoids thrashing
 
 ### CLI Commands
 

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -559,6 +559,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     /// Background operation progress
     pub background_progress: Option<BackgroundProgress>,
+    /// Queue of pending operations (executed sequentially)
+    pub operation_queue: VecDeque<OperationType>,
     /// Directory IDs where files are missing thumbnails (checked in background)
     pub dirs_missing_file_thumbnails: Arc<Mutex<HashSet<i64>>>,
 }
@@ -585,6 +587,7 @@ impl AppState {
             operations_menu: None,
             status_message: None,
             background_progress: None,
+            operation_queue: VecDeque::new(),
             dirs_missing_file_thumbnails: Arc::new(Mutex::new(HashSet::new())),
         };
 
@@ -1486,6 +1489,17 @@ impl AppState {
 
     /// Run a background operation on current directory and all subdirectories
     pub fn run_operation(&mut self, operation: OperationType) {
+        // If an operation is already running, queue this one
+        if self.background_progress.is_some() {
+            self.operation_queue.push_back(operation);
+            self.status_message = Some(format!(
+                "Queued {} ({} in queue)",
+                operation.label(),
+                self.operation_queue.len()
+            ));
+            return;
+        }
+
         // Handle directory preview operations separately
         if matches!(operation, OperationType::DirPreview | OperationType::DirPreviewRecursive) {
             self.run_dir_preview_operation(operation);
@@ -1772,10 +1786,29 @@ impl AppState {
                 let completed = progress.completed.load(Ordering::Relaxed);
                 let was_cancelled = progress.cancelled.load(Ordering::Relaxed);
                 let operation = progress.operation;
+                let queue_len = self.operation_queue.len();
+
                 if was_cancelled {
-                    self.status_message = Some(format!("Cancelled - {} {}", completed, progress.operation.done_label()));
+                    // Clear queue on cancel
+                    self.operation_queue.clear();
+                    self.status_message = Some(format!(
+                        "Cancelled - {} {}",
+                        completed,
+                        progress.operation.done_label()
+                    ));
+                } else if queue_len > 0 {
+                    self.status_message = Some(format!(
+                        "{} {} ({} more queued)",
+                        completed,
+                        progress.operation.done_label(),
+                        queue_len
+                    ));
                 } else {
-                    self.status_message = Some(format!("{} {}", completed, progress.operation.done_label()));
+                    self.status_message = Some(format!(
+                        "{} {}",
+                        completed,
+                        progress.operation.done_label()
+                    ));
                 }
                 self.background_progress = None;
                 // Clear preview cache to reload (for thumbnails)
@@ -1787,6 +1820,11 @@ impl AppState {
                         set.clear();
                     }
                     self.start_thumbnail_check();
+                }
+
+                // Start next queued operation if any
+                if let Some(next_op) = self.operation_queue.pop_front() {
+                    self.run_operation(next_op);
                 }
             }
         }
