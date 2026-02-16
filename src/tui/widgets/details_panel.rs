@@ -11,6 +11,8 @@ use crate::tui::colors::{
 };
 use crate::tui::state::{AppState, Focus};
 
+use super::has_dir_preview;
+
 pub fn render_details_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let content = match state.focus {
         Focus::FileList => render_file_details(state),
@@ -148,7 +150,17 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
     }
     let line4 = Line::from(line4_spans);
 
-    Text::from(vec![line1, line2, line3, line4])
+    let mut lines = vec![line1, line2, line3, line4];
+
+    // Add warning for missing preview
+    if !has_dir_preview(dir.id) {
+        lines.push(Line::from(Span::styled(
+            "󰋩 Missing preview image",
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    Text::from(lines)
 }
 
 /// Count all descendant subdirectories recursively

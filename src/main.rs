@@ -1,9 +1,15 @@
+use std::path::PathBuf;
+use std::time::Instant;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use picman::cli::{run_generate_previews, run_generate_thumbnails, run_init, run_list, run_rate, run_repair, run_sync, run_tag, ListOptions, TagOptions};
+use picman::cli::{
+    run_check_previews, run_check_thumbnails, run_generate_previews, run_generate_thumbnails,
+    run_init, run_list, run_rate, run_repair, run_status, run_sync, run_tag, ListOptions,
+    TagOptions,
+};
 use picman::logging::init_logging;
 use picman::tui::run_tui;
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "picman")]
@@ -102,15 +108,27 @@ enum Commands {
         /// Path to library root (defaults to current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Check which directories are missing previews (don't generate)
+        #[arg(long)]
+        check: bool,
     },
     /// Generate thumbnails for all media files
     Thumbnails {
         /// Path to library root (defaults to current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Check which directories are missing thumbnails (don't generate)
+        #[arg(long)]
+        check: bool,
     },
     /// Repair directory parent relationships based on paths
     Repair {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show library status and health
+    Status {
         /// Path to library root (defaults to current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -120,9 +138,22 @@ enum Commands {
 fn main() -> Result<()> {
     // Initialize logging - guard must be held for logs to flush
     let _guard = init_logging().ok();
+    let verbose = std::env::var("PICMAN_LOG").is_ok();
+    let start = Instant::now();
 
     let cli = Cli::parse();
 
+    let result = run_command(cli);
+
+    if verbose {
+        let elapsed = start.elapsed();
+        eprintln!("Completed in {:.2?}", elapsed);
+    }
+
+    result
+}
+
+fn run_command(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Commands::Init { path }) => {
             println!("Initializing library at: {}", path.display());
@@ -224,19 +255,27 @@ fn main() -> Result<()> {
             println!("Importing metadata...");
             // TODO: Implement import
         }
-        Some(Commands::Previews { path }) => {
-            let stats = run_generate_previews(&path)?;
-            println!(
-                "Done: {} generated, {} skipped (already existed), {} total",
-                stats.generated, stats.skipped, stats.total
-            );
+        Some(Commands::Previews { path, check }) => {
+            if check {
+                run_check_previews(&path)?;
+            } else {
+                let stats = run_generate_previews(&path)?;
+                println!(
+                    "Done: {} generated, {} skipped (already existed), {} total",
+                    stats.generated, stats.skipped, stats.total
+                );
+            }
         }
-        Some(Commands::Thumbnails { path }) => {
-            let stats = run_generate_thumbnails(&path)?;
-            println!(
-                "Done: {} generated, {} skipped, {} failed, {} total",
-                stats.generated, stats.skipped, stats.failed, stats.total
-            );
+        Some(Commands::Thumbnails { path, check }) => {
+            if check {
+                run_check_thumbnails(&path)?;
+            } else {
+                let stats = run_generate_thumbnails(&path)?;
+                println!(
+                    "Done: {} generated, {} skipped, {} failed, {} total",
+                    stats.generated, stats.skipped, stats.failed, stats.total
+                );
+            }
         }
         Some(Commands::Repair { path }) => {
             let fixed = run_repair(&path)?;
@@ -245,6 +284,9 @@ fn main() -> Result<()> {
             } else {
                 println!("Fixed {} directory parent relationships.", fixed);
             }
+        }
+        Some(Commands::Status { path }) => {
+            run_status(&path)?;
         }
         None => {
             // Launch TUI
