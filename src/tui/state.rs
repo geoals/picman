@@ -978,6 +978,9 @@ impl AppState {
     /// Close the tag input popup without applying
     pub fn close_tag_input(&mut self) {
         self.tag_input = None;
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
     }
 
     /// Apply the selected or entered tag
@@ -1017,6 +1020,9 @@ impl AppState {
         }
 
         self.tag_input = None;
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
         Ok(())
     }
 
@@ -1062,6 +1068,9 @@ impl AppState {
     /// Close the filter dialog without applying
     pub fn close_filter_dialog(&mut self) {
         self.filter_dialog = None;
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
     }
 
     /// Apply the filter from the dialog and close it
@@ -1089,6 +1098,9 @@ impl AppState {
             dialog.video_only = false;
             dialog.update_tag_filter();
         }
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
         // Reload files without filter
         self.load_files_for_selected_directory()?;
         Ok(())
@@ -1475,6 +1487,9 @@ impl AppState {
     /// Close the operations menu
     pub fn close_operations_menu(&mut self) {
         self.operations_menu = None;
+        // Invalidate preview cache to force full redraw
+        *self.preview_cache.borrow_mut() = None;
+        *self.directory_preview_cache.borrow_mut() = None;
     }
 
     /// Move selection up in operations menu
