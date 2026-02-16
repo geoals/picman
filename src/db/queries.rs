@@ -1334,4 +1334,125 @@ mod tests {
         let fixed = db.repair_directory_parents().unwrap();
         assert_eq!(fixed, 0);
     }
+
+    #[test]
+    fn test_directory_tag_includes_all_descendants() {
+        // Behavior: If a directory has a matching tag, ALL subdirectories and files should show
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory structure: photos -> vacation -> beach
+        let photos_id = db.insert_directory("photos", None, None).unwrap();
+        let vacation_id = db
+            .insert_directory("photos/vacation", Some(photos_id), None)
+            .unwrap();
+        let beach_id = db
+            .insert_directory("photos/vacation/beach", Some(vacation_id), None)
+            .unwrap();
+
+        // Add files at each level (none have tags)
+        db.insert_file(photos_id, "root.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        db.insert_file(vacation_id, "trip.jpg", 1024, 12346, Some("image"))
+            .unwrap();
+        db.insert_file(beach_id, "sunset.jpg", 1024, 12347, Some("image"))
+            .unwrap();
+
+        // Tag the DIRECTORY (not files)
+        db.add_directory_tag(vacation_id, "travel").unwrap();
+
+        // Query with "travel" tag filter
+        let result = db
+            .get_directories_with_matching_files(
+                crate::tui::state::RatingFilter::Any,
+                &["travel".to_string()],
+                false,
+            )
+            .unwrap();
+
+        // vacation should match (has the tag)
+        assert!(result.contains(&vacation_id));
+        // beach should be included (descendant of vacation)
+        assert!(result.contains(&beach_id));
+        // photos should be included (ancestor, to maintain tree structure)
+        assert!(result.contains(&photos_id));
+    }
+
+    #[test]
+    fn test_directory_rating_includes_all_descendants() {
+        // Behavior: If a directory has a matching rating, ALL subdirectories should show
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory structure: photos -> vacation -> beach
+        let photos_id = db.insert_directory("photos", None, None).unwrap();
+        let vacation_id = db
+            .insert_directory("photos/vacation", Some(photos_id), None)
+            .unwrap();
+        let beach_id = db
+            .insert_directory("photos/vacation/beach", Some(vacation_id), None)
+            .unwrap();
+
+        // Add files at each level (none have ratings)
+        db.insert_file(photos_id, "root.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        db.insert_file(vacation_id, "trip.jpg", 1024, 12346, Some("image"))
+            .unwrap();
+        db.insert_file(beach_id, "sunset.jpg", 1024, 12347, Some("image"))
+            .unwrap();
+
+        // Rate the DIRECTORY (not files)
+        db.set_directory_rating(vacation_id, Some(5)).unwrap();
+
+        // Query with rating filter
+        let result = db
+            .get_directories_with_matching_files(
+                crate::tui::state::RatingFilter::MinRating(4),
+                &[],
+                false,
+            )
+            .unwrap();
+
+        // vacation should match (has rating 5)
+        assert!(result.contains(&vacation_id));
+        // beach should be included (descendant of vacation)
+        assert!(result.contains(&beach_id));
+        // photos should be included (ancestor)
+        assert!(result.contains(&photos_id));
+    }
+
+    #[test]
+    fn test_file_tag_only_shows_that_file_not_siblings() {
+        // Behavior: If only a FILE has a tag (not directory), only that file's directory shows
+        // not sibling files
+        let db = Database::open_in_memory().unwrap();
+
+        // Create directory: photos
+        let photos_id = db.insert_directory("photos", None, None).unwrap();
+
+        // Add multiple files
+        let file1_id = db
+            .insert_file(photos_id, "photo1.jpg", 1024, 12345, Some("image"))
+            .unwrap();
+        db.insert_file(photos_id, "photo2.jpg", 1024, 12346, Some("image"))
+            .unwrap();
+        db.insert_file(photos_id, "photo3.jpg", 1024, 12347, Some("image"))
+            .unwrap();
+
+        // Tag only one file
+        db.add_file_tag(file1_id, "favorite").unwrap();
+
+        // Query with tag filter
+        let result = db
+            .get_directories_with_matching_files(
+                crate::tui::state::RatingFilter::Any,
+                &["favorite".to_string()],
+                false,
+            )
+            .unwrap();
+
+        // photos directory should be included (contains a matching file)
+        assert!(result.contains(&photos_id));
+
+        // The directory is included, but only photo1.jpg should actually show in the file list
+        // (this behavior is handled at the UI layer, not in this function)
+    }
 }

@@ -27,12 +27,18 @@ pub struct SyncStats {
     pub orientation_tagged: usize,
 }
 
+/// Metadata to preserve when a file is moved (as part of directory move)
+struct FileMetadata {
+    rating: Option<i32>,
+    tags: Vec<String>,
+}
+
 /// Metadata to preserve when a directory is moved
 struct DirectoryMetadata {
     rating: Option<i32>,
     tags: Vec<String>,
-    /// Files in this directory (filename only) for thumbnail migration
-    files: Vec<String>,
+    /// Files in this directory with their metadata (keyed by filename)
+    files: HashMap<String, FileMetadata>,
     /// The old directory path (for computing old thumbnail paths)
     old_path: String,
 }
@@ -236,19 +242,19 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
         .collect();
 
     // Collect metadata from directories being deleted, keyed by basename
-    // Also collect file names for thumbnail migration
+    // Also collect file metadata for preservation during moves
     let mut deleted_metadata: HashMap<String, DirectoryMetadata> = HashMap::new();
     for (path, &id) in &dirs_to_delete {
         let dir = db.get_directory(id)?;
-        let tags = db.get_directory_tags(id)?;
+        let dir_tags = db.get_directory_tags(id)?;
         let files_in_dir = db.get_files_in_directory(id)?;
 
-        let has_metadata = dir.as_ref().map(|d| d.rating.is_some()).unwrap_or(false)
-            || !tags.is_empty();
+        let has_dir_metadata = dir.as_ref().map(|d| d.rating.is_some()).unwrap_or(false)
+            || !dir_tags.is_empty();
         let has_files = !files_in_dir.is_empty();
 
-        // Preserve if has metadata OR has files (for thumbnail migration)
-        if has_metadata || has_files {
+        // Preserve if has metadata OR has files (for thumbnail/metadata migration)
+        if has_dir_metadata || has_files {
             let basename = Path::new(path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -267,12 +273,37 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
 
             // Only preserve if exactly one match (unambiguous move)
             if matches_in_new.len() == 1 {
+                // Collect file metadata (ratings and tags) for each file
+                let mut files_metadata: HashMap<String, FileMetadata> = HashMap::new();
+                for file in files_in_dir {
+                    let file_tags = db.get_file_tags(file.id)?;
+                    // Only store if file has metadata worth preserving
+                    if file.rating.is_some() || !file_tags.is_empty() {
+                        files_metadata.insert(
+                            file.filename.clone(),
+                            FileMetadata {
+                                rating: file.rating,
+                                tags: file_tags,
+                            },
+                        );
+                    } else {
+                        // Still track file for thumbnail migration (with empty metadata)
+                        files_metadata.insert(
+                            file.filename.clone(),
+                            FileMetadata {
+                                rating: None,
+                                tags: Vec::new(),
+                            },
+                        );
+                    }
+                }
+
                 deleted_metadata.insert(
                     basename,
                     DirectoryMetadata {
                         rating: dir.and_then(|d| d.rating),
-                        tags,
-                        files: files_in_dir.into_iter().map(|f| f.filename).collect(),
+                        tags: dir_tags,
+                        files: files_metadata,
                         old_path: path.to_string(),
                     },
                 );
@@ -310,6 +341,9 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
         .collect();
     new_dirs.sort_by_key(|(path, _)| path.matches('/').count());
 
+    // Track file metadata from moved directories (keyed by new dir path -> filename -> metadata)
+    let mut moved_file_metadata: HashMap<String, HashMap<String, FileMetadata>> = HashMap::new();
+
     let mut dir_path_to_id: HashMap<String, i64> = HashMap::new();
     for (path, mtime) in new_dirs {
         let parent_path = Path::new(path)
@@ -344,7 +378,7 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
 
             // Move thumbnails for files in this directory
-            for filename in &metadata.files {
+            for filename in metadata.files.keys() {
                 let old_file_path = library_path.join(&metadata.old_path).join(filename);
                 let new_file_path = library_path.join(path).join(filename);
 
@@ -376,6 +410,9 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
                     }
                 }
             }
+
+            // Store file metadata for restoration after files are inserted
+            moved_file_metadata.insert(path.clone(), metadata.files);
 
             stats.directories_moved += 1;
         }
@@ -417,7 +454,7 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
             None => {
                 // New file
-                db.insert_file(
+                let file_id = db.insert_file(
                     dir_id,
                     &file.filename,
                     file.size as i64,
@@ -425,6 +462,20 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
                     Some(file.media_type.as_str()),
                 )?;
                 stats.files_added += 1;
+
+                // Check if this file was part of a moved directory and restore metadata
+                if let Some(dir_files) = moved_file_metadata.get(&file.directory) {
+                    if let Some(file_meta) = dir_files.get(&file.filename) {
+                        // Restore rating
+                        if let Some(rating) = file_meta.rating {
+                            db.set_file_rating(file_id, Some(rating))?;
+                        }
+                        // Restore tags
+                        for tag in &file_meta.tags {
+                            db.add_file_tag(file_id, tag)?;
+                        }
+                    }
+                }
             }
         }
     }
