@@ -225,35 +225,34 @@ impl FilterDialogState {
         self.filtered_tags.get(self.tag_list_index)
     }
 
-    pub fn move_tag_list_up(&mut self) {
-        if !self.filtered_tags.is_empty() {
-            if self.tag_list_index > 0 {
-                self.tag_list_index -= 1;
-            } else {
-                self.tag_list_index = self.filtered_tags.len() - 1;
-                // Scroll to show the last item
-                self.tag_scroll_offset = self.filtered_tags.len().saturating_sub(5);
-            }
+    /// Move up in tag list. Returns true if moved, false if already at top.
+    pub fn move_tag_list_up(&mut self) -> bool {
+        if !self.filtered_tags.is_empty() && self.tag_list_index > 0 {
+            self.tag_list_index -= 1;
             // Ensure selection is visible (scroll up if needed)
             if self.tag_list_index < self.tag_scroll_offset {
                 self.tag_scroll_offset = self.tag_list_index;
             }
+            true
+        } else {
+            false
         }
     }
 
-    pub fn move_tag_list_down(&mut self) {
-        if !self.filtered_tags.is_empty() {
-            if self.tag_list_index < self.filtered_tags.len() - 1 {
-                self.tag_list_index += 1;
-                // Scroll down if selection goes below visible area (assume ~5 visible items)
-                let visible_height = 5;
-                if self.tag_list_index >= self.tag_scroll_offset + visible_height {
-                    self.tag_scroll_offset = self.tag_list_index - visible_height + 1;
-                }
-            } else {
-                self.tag_list_index = 0;
-                self.tag_scroll_offset = 0;
+    /// Move down in tag list. Returns true if moved, false if already at bottom.
+    pub fn move_tag_list_down(&mut self) -> bool {
+        if !self.filtered_tags.is_empty()
+            && self.tag_list_index < self.filtered_tags.len() - 1
+        {
+            self.tag_list_index += 1;
+            // Scroll down if selection goes below visible area (assume ~5 visible items)
+            let visible_height = 5;
+            if self.tag_list_index >= self.tag_scroll_offset + visible_height {
+                self.tag_scroll_offset = self.tag_list_index - visible_height + 1;
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -603,6 +602,13 @@ impl AppState {
             // If so, show all files without checking individual file filters
             let ancestor_matches_filter = self.directory_or_ancestor_matches_filter(dir.id)?;
 
+            // Get tags from this directory and all ancestors (for tag filter inheritance)
+            let dir_tags = if !self.filter.tags.is_empty() {
+                self.get_directory_and_ancestor_tags(dir.id)?
+            } else {
+                vec![]
+            };
+
             for file in files {
                 let tags = self.db.get_file_tags(file.id)?;
 
@@ -629,9 +635,11 @@ impl AppState {
                             }
                         }
                     }
-                    // Check tag filter (AND logic)
+                    // Check tag filter (AND logic) - include directory tags
                     if !self.filter.tags.is_empty() {
-                        let has_all_tags = self.filter.tags.iter().all(|t| tags.contains(t));
+                        let has_all_tags = self.filter.tags.iter().all(|t| {
+                            tags.contains(t) || dir_tags.contains(t)
+                        });
                         if !has_all_tags {
                             continue;
                         }
@@ -1076,6 +1084,28 @@ impl AppState {
         Ok(false)
     }
 
+    /// Get all tags from a directory and all its ancestors
+    fn get_directory_and_ancestor_tags(&self, dir_id: i64) -> Result<Vec<String>> {
+        let mut all_tags = Vec::new();
+        let mut current_id = Some(dir_id);
+
+        while let Some(id) = current_id {
+            // Get tags for this directory
+            let tags = self.db.get_directory_tags(id)?;
+            all_tags.extend(tags);
+
+            // Find parent
+            current_id = self
+                .tree
+                .directories
+                .iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.parent_id);
+        }
+
+        Ok(all_tags)
+    }
+
     /// Handle character input for filter dialog
     pub fn filter_dialog_char(&mut self, c: char) {
         if let Some(ref mut dialog) = self.filter_dialog {
@@ -1102,20 +1132,40 @@ impl AppState {
         }
     }
 
-    /// Move selection up in filter dialog
+    /// Move selection up in filter dialog (crosses sections at boundaries)
     pub fn filter_dialog_up(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
-            if dialog.focus == FilterDialogFocus::Tag {
-                dialog.move_tag_list_up();
+            match dialog.focus {
+                FilterDialogFocus::Tag => {
+                    // If at top of tag list, move to VideoOnly section
+                    if !dialog.move_tag_list_up() {
+                        dialog.focus = FilterDialogFocus::VideoOnly;
+                    }
+                }
+                FilterDialogFocus::VideoOnly => {
+                    dialog.focus = FilterDialogFocus::Rating;
+                }
+                FilterDialogFocus::Rating => {
+                    // Stay at top (Rating section)
+                }
             }
         }
     }
 
-    /// Move selection down in filter dialog
+    /// Move selection down in filter dialog (crosses sections at boundaries)
     pub fn filter_dialog_down(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
-            if dialog.focus == FilterDialogFocus::Tag {
-                dialog.move_tag_list_down();
+            match dialog.focus {
+                FilterDialogFocus::Rating => {
+                    dialog.focus = FilterDialogFocus::VideoOnly;
+                }
+                FilterDialogFocus::VideoOnly => {
+                    dialog.focus = FilterDialogFocus::Tag;
+                }
+                FilterDialogFocus::Tag => {
+                    // If at bottom of tag list, stay there
+                    dialog.move_tag_list_down();
+                }
             }
         }
     }
@@ -2053,5 +2103,101 @@ let (mut state, _tempdir) = create_test_app_state();
 
         let file = state.file_list.selected_file().unwrap();
         assert_eq!(file.file.rating, Some(3));
+    }
+
+    #[test]
+    fn test_filter_by_file_tag_and_directory_tag() {
+        // Bug: filtering by tag1 (on file) AND tag2 (on directory) should show the file
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let db_path = root.join(".picman.db");
+
+        // Create directory and file
+        fs::create_dir_all(root.join("photos")).unwrap();
+        fs::write(root.join("photos/img1.jpg"), "data").unwrap();
+
+        // Create and populate database
+        let db = Database::open(&db_path).unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+        let file_id = db.insert_file(dir_id, "img1.jpg", 4, 0, Some("image")).unwrap();
+
+        // Add tag to file
+        db.add_file_tag(file_id, "file_tag").unwrap();
+        // Add different tag to directory
+        db.add_directory_tag(dir_id, "dir_tag").unwrap();
+
+        let mut state = AppState::new(root, db).unwrap();
+
+        // Select the photos directory
+        state.tree.selected_index = 0;
+        state.tree.list_state.select(Some(0));
+        state.load_files_for_selected_directory().unwrap();
+
+        // Without filter, file should be visible
+        assert_eq!(state.file_list.files.len(), 1);
+
+        // Set filter to require both tags
+        state.filter.tags = vec!["file_tag".to_string(), "dir_tag".to_string()];
+        state.load_files_for_selected_directory().unwrap();
+
+        // File has file_tag directly and inherits dir_tag from directory
+        // So it should match the filter and be visible
+        assert_eq!(
+            state.file_list.files.len(),
+            1,
+            "File should be visible when filtering by file tag AND directory tag"
+        );
+    }
+
+    #[test]
+    fn test_filter_inherits_tags_from_grandparent() {
+        // Tags should be inherited from all ancestors, not just direct parent
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let db_path = root.join(".picman.db");
+
+        // Create nested directory structure
+        fs::create_dir_all(root.join("photos/vacation/beach")).unwrap();
+        fs::write(root.join("photos/vacation/beach/img1.jpg"), "data").unwrap();
+
+        // Create and populate database
+        let db = Database::open(&db_path).unwrap();
+        let photos_id = db.insert_directory("photos", None, None).unwrap();
+        let vacation_id = db.insert_directory("photos/vacation", Some(photos_id), None).unwrap();
+        let beach_id = db.insert_directory("photos/vacation/beach", Some(vacation_id), None).unwrap();
+        let file_id = db.insert_file(beach_id, "img1.jpg", 4, 0, Some("image")).unwrap();
+
+        // Add tag to file
+        db.add_file_tag(file_id, "sunset").unwrap();
+        // Add tag to grandparent (photos), not parent (beach)
+        db.add_directory_tag(photos_id, "family").unwrap();
+
+        let mut state = AppState::new(root, db).unwrap();
+
+        // Expand tree to show beach directory
+        state.tree.expanded.insert(photos_id);
+        state.tree.expanded.insert(vacation_id);
+
+        // Select the beach directory (index 2: photos=0, vacation=1, beach=2)
+        state.tree.selected_index = 2;
+        state.tree.list_state.select(Some(2));
+        state.load_files_for_selected_directory().unwrap();
+
+        // Set filter to require both tags
+        state.filter.tags = vec!["sunset".to_string(), "family".to_string()];
+        state.load_files_for_selected_directory().unwrap();
+
+        // File has sunset directly and inherits family from grandparent
+        assert_eq!(
+            state.file_list.files.len(),
+            1,
+            "File should inherit tags from grandparent directory"
+        );
     }
 }

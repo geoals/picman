@@ -6,6 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::tui::colors::{
+    format_rating, IMAGE_INDICATOR, RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR,
+};
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_details_panel(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -34,18 +37,17 @@ fn render_file_details(state: &AppState) -> Text<'static> {
         _ => file.filename.clone(),
     };
 
-    // Format rating
-    let rating = format_rating(file.rating);
-
     // Format size
     let size = format_size(file.size);
 
-    // Format media type
-    let media_type = file
-        .media_type
-        .as_deref()
-        .unwrap_or("unknown")
-        .to_string();
+    // Format media type with color indicator
+    let media_type_str = file.media_type.as_deref().unwrap_or("unknown");
+    let is_video = media_type_str.starts_with("video/");
+    let media_type_color = if is_video {
+        VIDEO_INDICATOR
+    } else {
+        IMAGE_INDICATOR
+    };
 
     // Get filesystem metadata for timestamps
     let (modified, created) = if let Some(fs_path) = state.selected_file_path() {
@@ -54,23 +56,38 @@ fn render_file_details(state: &AppState) -> Text<'static> {
         ("N/A".to_string(), "N/A".to_string())
     };
 
-    // Format tags
-    let tags = if file_with_tags.tags.is_empty() {
-        "none".to_string()
+    // Line 1: path
+    let line1 = Line::from(full_path);
+
+    // Line 2: size | type | rating
+    let line2 = Line::from(vec![
+        Span::raw(format!("{} | ", size)),
+        Span::styled(media_type_str.to_string(), Style::default().fg(media_type_color)),
+        Span::raw(" | Rating: "),
+        Span::styled(format_rating(file.rating), Style::default().fg(RATING_COLOR)),
+    ]);
+
+    // Line 3: timestamps
+    let line3 = Line::from(format!("Modified: {}  Created: {}", modified, created));
+
+    // Line 4: tags with colors
+    let mut line4_spans: Vec<Span> = vec![Span::raw("Tags: ")];
+    if file_with_tags.tags.is_empty() {
+        line4_spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
     } else {
-        file_with_tags.tags.join(", ")
-    };
+        for (i, tag) in file_with_tags.tags.iter().enumerate() {
+            if i > 0 {
+                line4_spans.push(Span::raw(" "));
+            }
+            line4_spans.push(Span::styled(
+                format!("#{}", tag),
+                Style::default().fg(TAG_COLOR),
+            ));
+        }
+    }
+    let line4 = Line::from(line4_spans);
 
-    // Build output lines
-    let line1 = format!("{} | {} | {} | {}", full_path, size, media_type, rating);
-    let line2 = format!("Modified: {} | Created: {}", modified, created);
-    let line3 = format!("Tags: {}", tags);
-
-    Text::from(vec![
-        Line::from(line1),
-        Line::from(line2),
-        Line::from(line3),
-    ])
+    Text::from(vec![line1, line2, line3, line4])
 }
 
 fn render_directory_details(state: &AppState) -> Text<'static> {
@@ -85,36 +102,53 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
         dir.path.clone()
     };
 
-    // Format rating
-    let rating = format_rating(dir.rating);
-
     // Count subdirs from in-memory tree (recursive)
     let subdir_count = count_subdirs_recursive(&state.tree.directories, dir.id);
 
     // Get file count and size from DB (recursive)
-    let (file_count, total_size) = state
-        .db
-        .get_directory_stats(dir.id)
-        .unwrap_or((0, 0));
+    let (file_count, total_size) = state.db.get_directory_stats(dir.id).unwrap_or((0, 0));
 
     // Get directory tags (query on demand)
     let tags = match state.db.get_directory_tags(dir.id) {
-        Ok(t) if t.is_empty() => "none".to_string(),
-        Ok(t) => t.join(", "),
-        Err(_) => "error loading tags".to_string(),
+        Ok(t) => t,
+        Err(_) => vec![],
     };
 
-    // Build output lines
-    let line1 = format!("{} | {}", path, rating);
-    let line2 = format!(
+    // Line 1: path
+    let line1 = Line::from(path);
+
+    // Line 2: rating
+    let line2 = Line::from(vec![
+        Span::raw("Rating: "),
+        Span::styled(format_rating(dir.rating), Style::default().fg(RATING_COLOR)),
+    ]);
+
+    // Line 3: stats
+    let line3 = Line::from(format!(
         "{} subdirs | {} files | {}",
         subdir_count,
         file_count,
         format_size(total_size)
-    );
-    let line3 = format!("Tags: {}", tags);
+    ));
 
-    Text::from(vec![Line::from(line1), Line::from(line2), Line::from(line3)])
+    // Line 4: tags with colors
+    let mut line4_spans: Vec<Span> = vec![Span::raw("Tags: ")];
+    if tags.is_empty() {
+        line4_spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
+    } else {
+        for (i, tag) in tags.iter().enumerate() {
+            if i > 0 {
+                line4_spans.push(Span::raw(" "));
+            }
+            line4_spans.push(Span::styled(
+                format!("#{}", tag),
+                Style::default().fg(TAG_COLOR),
+            ));
+        }
+    }
+    let line4 = Line::from(line4_spans);
+
+    Text::from(vec![line1, line2, line3, line4])
 }
 
 /// Count all descendant subdirectories recursively
@@ -127,17 +161,6 @@ fn count_subdirs_recursive(directories: &[crate::db::Directory], parent_id: i64)
         }
     }
     count
-}
-
-fn format_rating(rating: Option<i32>) -> String {
-    match rating {
-        Some(r) => {
-            let filled = "★".repeat(r as usize);
-            let empty = "☆".repeat(5 - r as usize);
-            format!("{}{}", filled, empty)
-        }
-        None => "unrated".to_string(),
-    }
 }
 
 fn format_size(bytes: i64) -> String {
@@ -193,7 +216,10 @@ fn format_system_time(time: std::time::SystemTime) -> String {
     // Calculate year, month, day from days since epoch (1970-01-01)
     let (year, month, day) = days_to_ymd(days_since_epoch);
 
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month, day, hours, minutes)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year, month, day, hours, minutes
+    )
 }
 
 fn days_to_ymd(days: i64) -> (i64, u32, u32) {

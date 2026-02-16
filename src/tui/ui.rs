@@ -32,10 +32,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let left_section = content_chunks[0];
     let preview_area = content_chunks[1];
 
-    // Split left section: tree+files area | details panel (4 lines)
+    // Split left section: tree+files area | details panel
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(5)])
+        .constraints([Constraint::Min(0), Constraint::Length(7)])
         .split(left_section);
 
     let tree_files_area = left_chunks[0];

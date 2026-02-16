@@ -1,9 +1,6 @@
-use ratatui::{
-    layout::Rect,
-    prelude::*,
-    widgets::Paragraph,
-};
+use ratatui::{layout::Rect, prelude::*, widgets::Paragraph};
 
+use crate::tui::colors::{RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
 use crate::tui::state::{AppState, Focus, RatingFilter};
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -13,10 +10,19 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(ref progress) = state.background_progress {
         let completed = progress.completed.load(Ordering::Relaxed);
         let total = progress.total;
-        let pct = if total > 0 { completed * 100 / total } else { 0 };
-        let msg = format!("{}: {}/{} ({}%)", progress.operation.label(), completed, total, pct);
-        let status = Paragraph::new(msg)
-            .style(Style::default().bg(Color::Yellow).fg(Color::Black));
+        let pct = if total > 0 {
+            completed * 100 / total
+        } else {
+            0
+        };
+        let msg = format!(
+            "{}: {}/{} ({}%)",
+            progress.operation.label(),
+            completed,
+            total,
+            pct
+        );
+        let status = Paragraph::new(msg).style(Style::default().bg(WARNING_COLOR).fg(Color::Black));
         frame.render_widget(status, area);
         return;
     }
@@ -29,54 +35,90 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let mut parts = Vec::new();
+    // Build status line with styled spans
+    let mut spans: Vec<Span> = Vec::new();
 
     // Current focus indicator
     let focus_str = match state.focus {
         Focus::DirectoryTree => "Tree",
         Focus::FileList => "Files",
     };
-    parts.push(format!("[{}]", focus_str));
+    spans.push(Span::raw(format!("[{}]", focus_str)));
 
-    // Filter indicator
+    // Filter indicator with colors
     if state.filter.is_active() {
-        let mut filter_parts = Vec::new();
+        spans.push(Span::raw(" [Filter: "));
+
+        let mut first = true;
+
+        // Video filter (magenta)
         if state.filter.video_only {
-            filter_parts.push("video".to_string());
+            spans.push(Span::styled("video", Style::default().fg(VIDEO_INDICATOR)));
+            first = false;
         }
+
+        // Rating filter (yellow)
         match state.filter.rating {
             RatingFilter::Any => {}
-            RatingFilter::Unrated => filter_parts.push("unrated".to_string()),
-            RatingFilter::MinRating(r) => filter_parts.push(format!("{}+", r)),
+            RatingFilter::Unrated => {
+                if !first {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled("unrated", Style::default().fg(RATING_COLOR)));
+                first = false;
+            }
+            RatingFilter::MinRating(r) => {
+                if !first {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(
+                    format!("{}+", r),
+                    Style::default().fg(RATING_COLOR),
+                ));
+                first = false;
+            }
         }
+
+        // Tag filters (blue)
         for t in &state.filter.tags {
-            filter_parts.push(format!("#{}", t));
+            if !first {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(format!("#{}", t), Style::default().fg(TAG_COLOR)));
+            first = false;
         }
-        parts.push(format!("[Filter: {}]", filter_parts.join(" ")));
+
+        spans.push(Span::raw("]"));
     }
 
     // Selected file info
     if let Some(file_with_tags) = state.file_list.selected_file() {
         let file = &file_with_tags.file;
-        parts.push(file.filename.clone());
+        spans.push(Span::raw(format!(" | {}", file.filename)));
+        spans.push(Span::raw(format!(" | {}", format_size(file.size))));
 
-        // File size
-        parts.push(format_size(file.size));
-
-        // Media type
         if let Some(ref media_type) = file.media_type {
-            parts.push(media_type.clone());
+            spans.push(Span::raw(format!(" | {}", media_type)));
         }
     }
 
-    // Keybinding hints
+    // Calculate remaining width for hints
+    let left_content: String = spans.iter().map(|s| s.content.as_ref()).collect();
     let hints = "j/k:move  m:filter  t:tag  ?:help  q:quit";
 
-    let left_part = parts.join(" | ");
-    let status_text = format!("{:width$}{}", left_part, hints, width = area.width as usize - hints.len());
+    // Pad with spaces to right-align hints
+    let padding_needed = area
+        .width
+        .saturating_sub(left_content.len() as u16)
+        .saturating_sub(hints.len() as u16);
+    if padding_needed > 0 {
+        spans.push(Span::raw(" ".repeat(padding_needed as usize)));
+    }
+    spans.push(Span::raw(hints));
 
-    let status = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let line = Line::from(spans);
+    let status =
+        Paragraph::new(line).style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
     frame.render_widget(status, area);
 }

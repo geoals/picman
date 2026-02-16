@@ -4,6 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem},
 };
 
+use crate::tui::colors::{FOCUS_COLOR, RATING_COLOR, UNFOCUS_COLOR};
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -28,30 +29,35 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState
             };
 
             // Get directory name (last component of path)
-            let name = dir
-                .path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&dir.path);
+            let name = dir.path.rsplit('/').next().unwrap_or(&dir.path);
 
             let display_name = if name.is_empty() { "." } else { name };
 
-            // Show rating as compact "★N" on left, or spaces for alignment
-            let rating = dir
-                .rating
-                .map(|r| format!("★{} ", r))
-                .unwrap_or_else(|| "   ".to_string());
+            // Build line with styled spans for colored rating
+            let mut spans = Vec::new();
+            spans.push(Span::raw(indent));
 
-            let line = format!("{}{}{}{}", indent, rating, icon, display_name);
+            // Show rating as compact "★N" on left, colored yellow
+            if let Some(r) = dir.rating {
+                spans.push(Span::styled(
+                    format!("★{} ", r),
+                    Style::default().fg(RATING_COLOR),
+                ));
+            } else {
+                spans.push(Span::raw("   "));
+            }
 
-            ListItem::new(line)
+            spans.push(Span::raw(icon));
+            spans.push(Span::raw(display_name.to_string()));
+
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
     let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(FOCUS_COLOR)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(UNFOCUS_COLOR)
     };
 
     let highlight_style = if is_focused {

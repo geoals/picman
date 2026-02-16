@@ -201,39 +201,45 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
                 state.filter_dialog_backspace();
                 state.auto_apply_filter()?;
             }
-            KeyCode::Char('0') => {
-                state.clear_filter()?;
-            }
-            KeyCode::Char('1') | KeyCode::Char('a') => {
-                state.filter_dialog_set_rating(1);
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('2') | KeyCode::Char('s') => {
-                state.filter_dialog_set_rating(2);
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('3') | KeyCode::Char('d') => {
-                state.filter_dialog_set_rating(3);
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('4') | KeyCode::Char('f') => {
-                state.filter_dialog_set_rating(4);
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('5') | KeyCode::Char('g') => {
-                state.filter_dialog_set_rating(5);
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('v') => {
-                state.filter_dialog_toggle_video();
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Char('u') => {
-                state.filter_dialog_set_unrated();
-                state.auto_apply_filter()?;
-            }
             KeyCode::Char(c) => {
-                state.filter_dialog_char(c);
+                // When in Tag focus, all chars go to tag input
+                if focus == Some(FilterDialogFocus::Tag) {
+                    state.filter_dialog_char(c);
+                } else {
+                    // Rating shortcuts only when not in Tag focus
+                    match c {
+                        '0' => state.clear_filter()?,
+                        '1' | 'a' => {
+                            state.filter_dialog_set_rating(1);
+                            state.auto_apply_filter()?;
+                        }
+                        '2' | 's' => {
+                            state.filter_dialog_set_rating(2);
+                            state.auto_apply_filter()?;
+                        }
+                        '3' | 'd' => {
+                            state.filter_dialog_set_rating(3);
+                            state.auto_apply_filter()?;
+                        }
+                        '4' | 'f' => {
+                            state.filter_dialog_set_rating(4);
+                            state.auto_apply_filter()?;
+                        }
+                        '5' | 'g' => {
+                            state.filter_dialog_set_rating(5);
+                            state.auto_apply_filter()?;
+                        }
+                        'v' => {
+                            state.filter_dialog_toggle_video();
+                            state.auto_apply_filter()?;
+                        }
+                        'u' => {
+                            state.filter_dialog_set_unrated();
+                            state.auto_apply_filter()?;
+                        }
+                        _ => {}
+                    }
+                }
             }
             _ => {}
         }

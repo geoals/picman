@@ -1,9 +1,10 @@
 use ratatui::{
     layout::Rect,
     prelude::*,
-    widgets::{Block, Borders, Row, Table},
+    widgets::{Block, Borders, Cell, Row, Table},
 };
 
+use crate::tui::colors::{FOCUS_COLOR, RATING_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR};
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -16,33 +17,59 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .map(|file_with_tags| {
             let file = &file_with_tags.file;
 
-            // Format rating as stars
-            let rating = file
-                .rating
-                .map(|r| "*".repeat(r as usize))
-                .unwrap_or_else(|| "-".to_string());
-
-            // Format tags
-            let tags = if file_with_tags.tags.is_empty() {
-                String::new()
+            // Format filename with video indicator
+            let is_video = file
+                .media_type
+                .as_deref()
+                .map(|t| t.starts_with("video/"))
+                .unwrap_or(false);
+            let name_cell = if is_video {
+                Cell::from(Line::from(vec![
+                    Span::styled("[V] ", Style::default().fg(VIDEO_INDICATOR)),
+                    Span::raw(&file.filename),
+                ]))
             } else {
-                file_with_tags.tags.join(", ")
+                Cell::from(file.filename.as_str())
+            };
+
+            // Format rating as stars with color
+            let rating_cell = if let Some(r) = file.rating {
+                let stars = "★".repeat(r as usize);
+                Cell::from(Span::styled(stars, Style::default().fg(RATING_COLOR)))
+            } else {
+                Cell::from(Span::styled("-", Style::default().fg(Color::DarkGray)))
+            };
+
+            // Format tags with color
+            let tags_cell = if file_with_tags.tags.is_empty() {
+                Cell::from("")
+            } else {
+                let mut spans: Vec<Span> = Vec::new();
+                for (i, tag) in file_with_tags.tags.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::raw(" "));
+                    }
+                    spans.push(Span::styled(
+                        format!("#{}", tag),
+                        Style::default().fg(TAG_COLOR),
+                    ));
+                }
+                Cell::from(Line::from(spans))
             };
 
             // Format file size
             let size = format_size(file.size);
 
-            Row::new(vec![
-                file.filename.clone(),
-                rating,
-                tags,
-                size,
-            ])
+            Row::new(vec![name_cell, rating_cell, tags_cell, Cell::from(size)])
         })
         .collect();
 
     let header = Row::new(vec!["Name", "Rating", "Tags", "Size"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .bottom_margin(1);
 
     let widths = [
@@ -53,9 +80,9 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
     ];
 
     let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(FOCUS_COLOR)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(UNFOCUS_COLOR)
     };
 
     let file_count = state.file_list.files.len();
