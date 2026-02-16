@@ -45,6 +45,7 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
     let mut dir_ids: HashMap<String, i64> = HashMap::new();
 
     // First pass: insert all directories
+    eprint!("[init] Scanning directories...");
     for dir in scanner.scan_directories() {
         let parent_id = dir
             .parent_relative_path
@@ -55,8 +56,10 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
         dir_ids.insert(dir.relative_path, id);
         stats.directories += 1;
     }
+    eprintln!(" {} directories", stats.directories);
 
     // Second pass: insert all files
+    eprint!("[init] Scanning files...");
     for file in scanner.scan_files() {
         // Get or create the directory for this file
         let dir_id = if file.directory.is_empty() {
@@ -92,8 +95,11 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
             crate::scanner::MediaType::Other => {}
         }
     }
+    eprintln!(" {} files ({} images, {} videos)", stats.files, stats.images, stats.videos);
 
+    eprint!("[init] Committing to database...");
     db.commit()?;
+    eprintln!(" done");
 
     Ok(stats)
 }

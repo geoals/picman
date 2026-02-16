@@ -20,9 +20,14 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
     let db_path = library_path.join(".picman.db");
     let mut status_parts = Vec::new();
 
+    eprintln!("[picman] Starting up...");
+    eprintln!("[picman] Library: {}", library_path.display());
+
     // Auto-init if no database exists
     if !db_path.exists() {
+        eprintln!("[picman] No database found, initializing...");
         let stats = run_init(library_path)?;
+        eprintln!("[picman] Init complete: {} dirs, {} files", stats.directories, stats.files);
         status_parts.push(format!(
             "Init: {} dirs, {} files",
             stats.directories, stats.files
@@ -30,12 +35,16 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
     }
 
     // Always sync on startup (fast mtime check)
+    eprintln!("[picman] Syncing database with filesystem...");
     let sync_stats = run_sync(library_path, false, false)?;
     let sync_changes = sync_stats.directories_added
         + sync_stats.directories_removed
         + sync_stats.files_added
         + sync_stats.files_removed
         + sync_stats.files_modified;
+    eprintln!("[picman] Sync complete: +{} -{} dirs, +{} -{} ~{} files",
+        sync_stats.directories_added, sync_stats.directories_removed,
+        sync_stats.files_added, sync_stats.files_removed, sync_stats.files_modified);
     if sync_changes > 0 {
         status_parts.push(format!(
             "Sync: +{} -{} files",
@@ -44,10 +53,13 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
         ));
     }
 
+    eprintln!("[picman] Opening database...");
     let db = Database::open(&db_path)?;
 
     // Initialize state
+    eprintln!("[picman] Loading directory tree...");
     let mut state = AppState::new(library_path.to_path_buf(), db)?;
+    eprintln!("[picman] Loaded {} directories", state.tree.directories.len());
 
     // Show startup status
     if !status_parts.is_empty() {
@@ -55,6 +67,7 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
     }
 
     // Setup terminal
+    eprintln!("[picman] Setting up terminal...");
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;

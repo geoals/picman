@@ -215,26 +215,34 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
     // === Phase 1: Gather current state ===
 
     // Get all directories from filesystem
+    eprint!("[sync] Scanning directories...");
     let fs_dirs: HashMap<String, i64> = scanner
         .scan_directories()
         .map(|d| (d.relative_path, d.mtime))
         .collect();
+    eprintln!(" {} found", fs_dirs.len());
 
     // Get all directories from database
+    eprint!("[sync] Loading directories from DB...");
     let db_dirs: HashMap<String, i64> = db.get_all_directories()?
         .into_iter()
         .map(|d| (d.path, d.id))
         .collect();
+    eprintln!(" {} loaded", db_dirs.len());
 
     // Get all files from filesystem
+    eprint!("[sync] Scanning files...");
     let fs_files: Vec<_> = scanner.scan_files();
+    eprintln!(" {} found", fs_files.len());
     let fs_file_set: HashSet<(String, String)> = fs_files
         .iter()
         .map(|f| (f.directory.clone(), f.filename.clone()))
         .collect();
 
     // Get all files from database
+    eprint!("[sync] Loading files from DB...");
     let db_files = db.get_all_files()?;
+    eprintln!(" {} loaded", db_files.len());
 
     // Create lookup from directory_id to path
     let dir_id_to_path: HashMap<i64, String> = db.get_all_directories()?
@@ -243,11 +251,14 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
         .collect();
 
     // === Phase 2: Detect moved directories and collect metadata ===
+    eprint!("[sync] Detecting changes...");
 
     // Find directories that will be deleted
+    // Note: The "" directory represents root-level files and is never in the filesystem scan,
+    // so we must skip it to avoid FK constraint failures
     let dirs_to_delete: Vec<_> = db_dirs
         .iter()
-        .filter(|(path, _)| !fs_dirs.contains_key(*path))
+        .filter(|(path, _)| !path.is_empty() && !fs_dirs.contains_key(*path))
         .collect();
 
     // Find new directories
@@ -300,8 +311,10 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
         }
     }
+    eprintln!(" {} dirs to delete, {} new dirs", dirs_to_delete.len(), new_dir_paths.len());
 
     // === Phase 3: Delete removed items (files first due to FK constraint) ===
+    eprint!("[sync] Applying changes...");
 
     // Delete removed files
     for file in &db_files {
@@ -447,8 +460,11 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
         }
     }
+    eprintln!(" done");
 
+    eprint!("[sync] Committing to database...");
     db.commit()?;
+    eprintln!(" done");
 
     Ok(stats)
 }
@@ -885,5 +901,40 @@ mod tests {
         let photos_d = db.get_directory_by_path("d/Photos").unwrap().unwrap();
         assert_eq!(photos_c.rating, None);
         assert_eq!(photos_d.rating, None);
+    }
+
+    #[test]
+    fn test_sync_preserves_root_directory_with_files() {
+        // Reproduces bug: sync tried to delete "" directory created for root-level files,
+        // causing FK constraint failure since files still referenced it
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create a file directly in the root (not in a subdirectory)
+        fs::write(root.join("root_image.jpg"), "data").unwrap();
+
+        // Init - this creates a "" directory for root-level files
+        run_init(root).unwrap();
+
+        // Verify "" directory exists with the file
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let root_dir = db.get_directory_by_path("").unwrap();
+        assert!(root_dir.is_some(), "Root directory should exist after init");
+        let files = db.get_files_in_directory(root_dir.unwrap().id).unwrap();
+        assert_eq!(files.len(), 1);
+        drop(db);
+
+        // Sync should NOT fail with FK constraint error
+        let stats = run_sync(root, false, false).unwrap();
+
+        // The "" directory should NOT be deleted
+        assert_eq!(stats.directories_removed, 0);
+
+        // Verify "" directory and file still exist
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let root_dir = db.get_directory_by_path("").unwrap();
+        assert!(root_dir.is_some(), "Root directory should still exist after sync");
+        let files = db.get_files_in_directory(root_dir.unwrap().id).unwrap();
+        assert_eq!(files.len(), 1);
     }
 }
