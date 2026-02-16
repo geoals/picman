@@ -166,8 +166,23 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
     Text::from(lines)
 }
 
-/// Check if a directory has any media files missing thumbnails (on-demand check)
+/// Check if a directory has any media files missing thumbnails (cached)
 fn check_dir_missing_thumbnails(state: &AppState, dir: &crate::db::Directory) -> bool {
+    // Check cache first
+    if let Some((cached_id, cached_result)) = *state.missing_preview_cache.borrow() {
+        if cached_id == dir.id {
+            return cached_result;
+        }
+    }
+
+    // Compute and cache
+    let result = compute_missing_thumbnails(state, dir);
+    *state.missing_preview_cache.borrow_mut() = Some((dir.id, result));
+    result
+}
+
+/// Actually check if directory has missing thumbnails
+fn compute_missing_thumbnails(state: &AppState, dir: &crate::db::Directory) -> bool {
     let files = match state.db.get_files_in_directory(dir.id) {
         Ok(f) => f,
         Err(_) => return false,

@@ -561,6 +561,8 @@ pub struct AppState {
     pub background_progress: Option<BackgroundProgress>,
     /// Queue of pending operations (executed sequentially)
     pub operation_queue: VecDeque<OperationType>,
+    /// Cache for missing preview check: (dir_id, is_missing)
+    pub missing_preview_cache: RefCell<Option<(i64, bool)>>,
 }
 
 impl AppState {
@@ -586,6 +588,7 @@ impl AppState {
             status_message: None,
             background_progress: None,
             operation_queue: VecDeque::new(),
+            missing_preview_cache: RefCell::new(None),
         };
 
         // Load files for initial selection
@@ -1804,8 +1807,9 @@ impl AppState {
                     ));
                 }
                 self.background_progress = None;
-                // Clear preview cache to reload (for thumbnails)
+                // Clear preview caches to reload
                 *self.preview_cache.borrow_mut() = None;
+                *self.missing_preview_cache.borrow_mut() = None;
 
                 // Start next queued operation if any
                 if let Some(next_op) = self.operation_queue.pop_front() {
