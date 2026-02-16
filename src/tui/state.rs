@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Result;
 use ratatui::widgets::{ListState, TableState};
@@ -533,6 +534,7 @@ pub struct BackgroundProgress {
     pub completed: Arc<AtomicUsize>,
     pub done: Arc<AtomicBool>,
     pub cancelled: Arc<AtomicBool>,
+    pub start_time: Instant,
 }
 
 /// Main application state
@@ -1562,6 +1564,7 @@ impl AppState {
             completed: Arc::clone(&completed),
             done: Arc::clone(&done),
             cancelled: Arc::clone(&cancelled),
+            start_time: Instant::now(),
         });
 
         // Get db path for operations that need it
@@ -1703,6 +1706,7 @@ impl AppState {
             completed: Arc::clone(&completed),
             done: Arc::clone(&done),
             cancelled: Arc::clone(&cancelled),
+            start_time: Instant::now(),
         });
 
         let db_path = self.library_path.join(".picman.db");

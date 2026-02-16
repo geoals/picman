@@ -3,6 +3,20 @@ use ratatui::{layout::Rect, prelude::*, widgets::Paragraph};
 use crate::tui::colors::{RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
 use crate::tui::state::{AppState, Focus, RatingFilter};
 
+/// Spinner frames for indeterminate progress
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Format duration as human-readable string
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     use std::sync::atomic::Ordering;
 
@@ -10,19 +24,70 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(ref progress) = state.background_progress {
         let completed = progress.completed.load(Ordering::Relaxed);
         let total = progress.total;
-        let pct = if total > 0 {
-            completed * 100 / total
+        let elapsed = progress.start_time.elapsed();
+        let elapsed_secs = elapsed.as_secs();
+
+        let mut spans: Vec<Span> = Vec::new();
+
+        // Spinner animation (based on elapsed time)
+        let spinner_idx = (elapsed.as_millis() / 80) as usize % SPINNER_FRAMES.len();
+        spans.push(Span::styled(
+            format!("{} ", SPINNER_FRAMES[spinner_idx]),
+            Style::default().fg(Color::Cyan),
+        ));
+
+        // Operation label
+        spans.push(Span::raw(format!("{} ", progress.operation.label())));
+
+        // Visual progress bar
+        let bar_width = 20usize;
+        let filled = if total > 0 {
+            (completed * bar_width / total).min(bar_width)
         } else {
             0
         };
-        let msg = format!(
-            "{}: {}/{} ({}%)",
-            progress.operation.label(),
-            completed,
-            total,
-            pct
-        );
-        let status = Paragraph::new(msg).style(Style::default().bg(WARNING_COLOR).fg(Color::Black));
+        let empty = bar_width - filled;
+
+        spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "█".repeat(filled),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::styled(
+            "░".repeat(empty),
+            Style::default().fg(Color::DarkGray),
+        ));
+        spans.push(Span::styled("] ", Style::default().fg(Color::DarkGray)));
+
+        // Count and percentage
+        let pct = if total > 0 { completed * 100 / total } else { 0 };
+        spans.push(Span::raw(format!("{}/{} ({}%) ", completed, total, pct)));
+
+        // Elapsed time
+        spans.push(Span::styled(
+            format_duration(elapsed_secs),
+            Style::default().fg(Color::Yellow),
+        ));
+
+        // ETA (only show if we have meaningful progress)
+        if completed > 0 && completed < total {
+            let rate = completed as f64 / elapsed_secs.max(1) as f64;
+            let remaining = (total - completed) as f64 / rate;
+            spans.push(Span::raw(" | ETA "));
+            spans.push(Span::styled(
+                format_duration(remaining as u64),
+                Style::default().fg(Color::Green),
+            ));
+        }
+
+        // Cancel hint
+        spans.push(Span::styled(
+            " [Esc to cancel]",
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        let line = Line::from(spans);
+        let status = Paragraph::new(line).style(Style::default().bg(WARNING_COLOR).fg(Color::Black));
         frame.render_widget(status, area);
         return;
     }
