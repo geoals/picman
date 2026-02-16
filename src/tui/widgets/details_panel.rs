@@ -11,7 +11,7 @@ use crate::tui::colors::{
 };
 use crate::tui::state::{AppState, Focus};
 
-use super::has_dir_preview;
+use super::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
 
 pub fn render_details_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let content = match state.focus {
@@ -152,23 +152,42 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
 
     let mut lines = vec![line1, line2, line3, line4];
 
-    // Add warning for missing preview
-    if !has_dir_preview(dir.id) {
+    // Check for missing preview (either dir preview or file thumbnails)
+    let missing_dir_preview = !has_dir_preview(dir.id);
+    let missing_file_thumbnail = check_dir_missing_thumbnails(state, dir);
+
+    if missing_dir_preview || missing_file_thumbnail {
         lines.push(Line::from(Span::styled(
-            "󰋩 Missing preview image",
+            "󰋩 Missing preview",
             Style::default().fg(Color::Red),
         )));
     }
 
-    // Add warning for missing file thumbnails
-    if state.dir_missing_file_thumbnails(dir.id) {
-        lines.push(Line::from(Span::styled(
-            "󰐊 Missing file thumbnails",
-            Style::default().fg(Color::Yellow),
-        )));
+    Text::from(lines)
+}
+
+/// Check if a directory has any media files missing thumbnails (on-demand check)
+fn check_dir_missing_thumbnails(state: &AppState, dir: &crate::db::Directory) -> bool {
+    let files = match state.db.get_files_in_directory(dir.id) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let dir_path = if dir.path.is_empty() {
+        state.library_path.clone()
+    } else {
+        state.library_path.join(&dir.path)
+    };
+
+    // Check first media file only (quick check)
+    for file in &files {
+        let path = dir_path.join(&file.filename);
+        if is_image_file(&path) || is_video_file(&path) {
+            return !has_thumbnail(&path);
+        }
     }
 
-    Text::from(lines)
+    false
 }
 
 /// Count all descendant subdirectories recursively

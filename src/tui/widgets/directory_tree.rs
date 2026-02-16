@@ -7,8 +7,6 @@ use ratatui::{
 use crate::tui::colors::{FOCUS_COLOR, RATING_COLOR, UNFOCUS_COLOR};
 use crate::tui::state::{AppState, Focus};
 
-use super::has_dir_preview;
-
 pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let is_focused = state.focus == Focus::DirectoryTree;
 
@@ -51,16 +49,6 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState
 
             spans.push(Span::raw(icon));
             spans.push(Span::raw(display_name.to_string()));
-
-            // Show missing preview indicator
-            if !has_dir_preview(dir.id) {
-                spans.push(Span::styled(" 󰋩", Style::default().fg(Color::Red)));
-            }
-
-            // Show missing file thumbnail indicator
-            if state.dir_missing_file_thumbnails(dir.id) {
-                spans.push(Span::styled(" 󰐊", Style::default().fg(Color::Yellow)));
-            }
 
             ListItem::new(Line::from(spans))
         })
