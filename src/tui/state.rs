@@ -10,36 +10,8 @@ use ratatui::widgets::{ListState, TableState};
 use ratatui_image::protocol::StatefulProtocol;
 
 use crate::db::{Database, Directory, File};
-
-/// Detect image orientation from EXIF data
-fn detect_orientation(path: &std::path::Path) -> Option<&'static str> {
-    let size = imagesize::size(path).ok()?;
-    let (mut width, mut height) = (size.width, size.height);
-
-    // Check EXIF orientation - values 5-8 involve 90° rotation, swapping dimensions
-    if let Ok(file) = std::fs::File::open(path) {
-        let mut bufreader = std::io::BufReader::new(file);
-        if let Ok(exif) = exif::Reader::new().read_from_container(&mut bufreader) {
-            if let Some(orientation) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-                if let exif::Value::Short(ref vals) = orientation.value {
-                    if let Some(&val) = vals.first() {
-                        if val >= 5 && val <= 8 {
-                            std::mem::swap(&mut width, &mut height);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if width > height {
-        Some("landscape")
-    } else if height > width {
-        Some("portrait")
-    } else {
-        None
-    }
-}
+use crate::scanner::detect_orientation;
+use crate::suggestions::extract_suggested_words;
 
 /// Rating filter options
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -203,93 +175,6 @@ impl RenameDialogState {
             self.cursor_pos = self.new_name.len();
         }
     }
-}
-
-/// Extract meaningful words from a directory path for rename suggestions
-pub fn extract_suggested_words(path: &str, file_tags: &[String]) -> Vec<String> {
-    use std::collections::HashMap;
-
-    let mut word_counts: HashMap<String, usize> = HashMap::new();
-
-    // Delimiters for splitting
-    let delimiters = [' ', '-', '_', '@', '(', ')', '[', ']', '{', '}',
-                      '【', '】', '「', '」', '『', '』', '/', '\\', '&', '+'];
-
-    // Noise words to filter out
-    let noise: std::collections::HashSet<&str> = [
-        "no", "vol", "p", "v", "gb", "mb", "kb", "pic", "video", "gif",
-        "cosplay", "coser", "ver", "version", "normal", "bonus", "set",
-        "part", "作品", "月", "年", "订阅", "特典", "合集",
-    ].iter().copied().collect();
-
-    // Process path segments
-    for segment in path.split('/') {
-        let mut current_word = String::new();
-
-        for c in segment.chars() {
-            if delimiters.contains(&c) {
-                if !current_word.is_empty() {
-                    process_word(&current_word, &noise, &mut word_counts);
-                    current_word.clear();
-                }
-            } else {
-                current_word.push(c);
-            }
-        }
-
-        if !current_word.is_empty() {
-            process_word(&current_word, &noise, &mut word_counts);
-        }
-    }
-
-    // Add file tags with high weight
-    for tag in file_tags {
-        *word_counts.entry(tag.clone()).or_insert(0) += 3;
-    }
-
-    // Sort by frequency, then alphabetically
-    let mut words: Vec<(String, usize)> = word_counts.into_iter().collect();
-    words.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-    words.into_iter().map(|(w, _)| w).take(30).collect()
-}
-
-fn process_word(
-    word: &str,
-    noise: &std::collections::HashSet<&str>,
-    counts: &mut std::collections::HashMap<String, usize>
-) {
-    let trimmed = word.trim();
-    let lower = trimmed.to_lowercase();
-
-    // Skip if too short
-    if trimmed.len() < 2 {
-        return;
-    }
-
-    // Skip if noise word
-    if noise.contains(lower.as_str()) {
-        return;
-    }
-
-    // Skip if purely numeric
-    if trimmed.chars().all(|c| c.is_ascii_digit()) {
-        return;
-    }
-
-    // Skip if looks like file size (e.g., "1.37GB", "350MB")
-    if trimmed.ends_with("GB") || trimmed.ends_with("MB") || trimmed.ends_with("KB") {
-        return;
-    }
-
-    // Skip patterns like "73P1V" or "45P"
-    if trimmed.chars().any(|c| c.is_ascii_digit())
-       && (trimmed.contains('P') || trimmed.contains('V'))
-       && trimmed.len() < 10 {
-        return;
-    }
-
-    *counts.entry(trimmed.to_string()).or_insert(0) += 1;
 }
 
 /// State for the filter dialog popup
@@ -1841,5 +1726,332 @@ impl AppState {
     /// Clear status message
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== RenameDialogState Tests ====================
+
+    #[test]
+    fn test_rename_dialog_extracts_name_from_path() {
+        let state = RenameDialogState::new(1, "photos/vacation/beach".to_string(), vec![]);
+        assert_eq!(state.new_name, "beach");
+        assert_eq!(state.cursor_pos, 5); // "beach".len()
+    }
+
+    #[test]
+    fn test_rename_dialog_insert_char() {
+        let mut state = RenameDialogState::new(1, "test".to_string(), vec![]);
+        state.cursor_pos = 2;
+        state.insert_char('X');
+        assert_eq!(state.new_name, "teXst");
+        assert_eq!(state.cursor_pos, 3);
+    }
+
+    #[test]
+    fn test_rename_dialog_backspace() {
+        let mut state = RenameDialogState::new(1, "test".to_string(), vec![]);
+        state.cursor_pos = 2;
+        state.backspace();
+        assert_eq!(state.new_name, "tst");
+        assert_eq!(state.cursor_pos, 1);
+    }
+
+    #[test]
+    fn test_rename_dialog_backspace_at_start() {
+        let mut state = RenameDialogState::new(1, "test".to_string(), vec![]);
+        state.cursor_pos = 0;
+        state.backspace();
+        assert_eq!(state.new_name, "test");
+        assert_eq!(state.cursor_pos, 0);
+    }
+
+    #[test]
+    fn test_rename_dialog_cursor_movement() {
+        let mut state = RenameDialogState::new(1, "test".to_string(), vec![]);
+        assert_eq!(state.cursor_pos, 4);
+
+        state.move_cursor_left();
+        assert_eq!(state.cursor_pos, 3);
+
+        state.move_cursor_home();
+        assert_eq!(state.cursor_pos, 0);
+
+        state.move_cursor_right();
+        assert_eq!(state.cursor_pos, 1);
+
+        state.move_cursor_end();
+        assert_eq!(state.cursor_pos, 4);
+    }
+
+    #[test]
+    fn test_rename_dialog_use_suggestion() {
+        let mut state = RenameDialogState::new(
+            1,
+            "test".to_string(),
+            vec!["alpha".to_string(), "beta".to_string()],
+        );
+        state.selected_suggestion = 1;
+        state.use_suggestion();
+        assert_eq!(state.new_name, "beta");
+        assert_eq!(state.cursor_pos, 4);
+    }
+
+    // ==================== FilterDialogState Tests ====================
+
+    #[test]
+    fn test_filter_dialog_update_tag_filter() {
+        let all_tags = vec!["landscape".to_string(), "portrait".to_string(), "nature".to_string()];
+        let mut state = FilterDialogState::new(all_tags, &FilterCriteria::default());
+
+        state.tag_input = "port".to_string();
+        state.update_tag_filter();
+
+        assert_eq!(state.filtered_tags.len(), 1);
+        assert_eq!(state.filtered_tags[0], "portrait");
+    }
+
+    #[test]
+    fn test_filter_dialog_excludes_selected_tags() {
+        let all_tags = vec!["landscape".to_string(), "portrait".to_string()];
+        let mut state = FilterDialogState::new(all_tags, &FilterCriteria::default());
+
+        state.selected_tags.push("landscape".to_string());
+        state.update_tag_filter();
+
+        assert_eq!(state.filtered_tags.len(), 1);
+        assert_eq!(state.filtered_tags[0], "portrait");
+    }
+
+    #[test]
+    fn test_filter_dialog_to_criteria() {
+        let all_tags = vec!["landscape".to_string()];
+        let mut state = FilterDialogState::new(all_tags, &FilterCriteria::default());
+
+        state.rating_filter = RatingFilter::MinRating(3);
+        state.selected_tags = vec!["nature".to_string()];
+        state.video_only = true;
+
+        let criteria = state.to_criteria();
+
+        assert_eq!(criteria.rating, RatingFilter::MinRating(3));
+        assert_eq!(criteria.tags, vec!["nature".to_string()]);
+        assert!(criteria.video_only);
+    }
+
+    // ==================== TagInputState Tests ====================
+
+    #[test]
+    fn test_tag_input_filter_by_query() {
+        let all_tags = vec!["landscape".to_string(), "portrait".to_string(), "beach".to_string()];
+        let mut state = TagInputState::new(all_tags);
+
+        state.input = "port".to_string();
+        state.update_filter();
+
+        assert_eq!(state.filtered_tags.len(), 1);
+        assert_eq!(state.filtered_tags[0], "portrait");
+    }
+
+    #[test]
+    fn test_tag_input_navigation_wraps() {
+        let all_tags = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut state = TagInputState::new(all_tags);
+
+        assert_eq!(state.selected_index, 0);
+
+        state.move_up();
+        assert_eq!(state.selected_index, 2); // Wrapped to bottom
+
+        state.move_down();
+        assert_eq!(state.selected_index, 0); // Wrapped to top
+    }
+
+    // ==================== TreeState Tests ====================
+
+    fn create_test_directories() -> Vec<Directory> {
+        vec![
+            Directory { id: 1, path: "photos".to_string(), parent_id: None, rating: None, mtime: Some(0) },
+            Directory { id: 2, path: "photos/vacation".to_string(), parent_id: Some(1), rating: None, mtime: Some(0) },
+            Directory { id: 3, path: "photos/vacation/beach".to_string(), parent_id: Some(2), rating: None, mtime: Some(0) },
+            Directory { id: 4, path: "videos".to_string(), parent_id: None, rating: Some(5), mtime: Some(0) },
+        ]
+    }
+
+    #[test]
+    fn test_tree_visible_directories_respects_expansion() {
+        let dirs = create_test_directories();
+        let mut tree = TreeState::new(dirs);
+
+        // Initially only root level visible
+        let visible = tree.visible_directories();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].path, "photos");
+        assert_eq!(visible[1].path, "videos");
+
+        // Expand photos
+        tree.expanded.insert(1);
+        let visible = tree.visible_directories();
+        assert_eq!(visible.len(), 3);
+        assert_eq!(visible[0].path, "photos");
+        assert_eq!(visible[1].path, "photos/vacation");
+        assert_eq!(visible[2].path, "videos");
+    }
+
+    #[test]
+    fn test_tree_has_children() {
+        let dirs = create_test_directories();
+        let tree = TreeState::new(dirs);
+
+        assert!(tree.has_children(1));  // photos has vacation
+        assert!(tree.has_children(2));  // vacation has beach
+        assert!(!tree.has_children(3)); // beach has no children
+        assert!(!tree.has_children(4)); // videos has no children
+    }
+
+    #[test]
+    fn test_tree_depth_calculation() {
+        let dirs = create_test_directories();
+        let tree = TreeState::new(dirs);
+
+        assert_eq!(tree.depth(&tree.directories[0]), 0); // photos
+        assert_eq!(tree.depth(&tree.directories[1]), 1); // photos/vacation
+        assert_eq!(tree.depth(&tree.directories[2]), 2); // photos/vacation/beach
+        assert_eq!(tree.depth(&tree.directories[3]), 0); // videos
+    }
+
+    #[test]
+    fn test_tree_filtered_visibility() {
+        let dirs = create_test_directories();
+        let mut tree = TreeState::new(dirs);
+        tree.expanded.insert(1);
+        tree.expanded.insert(2);
+
+        // Only show directories 1 and 3 (photos and beach)
+        let matching: HashSet<i64> = [1, 3].iter().copied().collect();
+        let visible = tree.visible_directories_filtered(&matching);
+
+        assert_eq!(visible.len(), 1); // Only photos visible (beach is under vacation which isn't in filter)
+    }
+
+    // ==================== FilterCriteria Tests ====================
+
+    #[test]
+    fn test_filter_criteria_is_active() {
+        let mut criteria = FilterCriteria::default();
+        assert!(!criteria.is_active());
+
+        criteria.rating = RatingFilter::MinRating(3);
+        assert!(criteria.is_active());
+
+        criteria = FilterCriteria::default();
+        criteria.tags = vec!["test".to_string()];
+        assert!(criteria.is_active());
+
+        criteria = FilterCriteria::default();
+        criteria.video_only = true;
+        assert!(criteria.is_active());
+    }
+
+    // ==================== AppState Navigation Tests (require in-memory DB) ====================
+
+    fn create_test_app_state() -> (AppState, tempfile::TempDir) {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let db_path = root.join(".picman.db");
+
+        // Create directory structure
+        fs::create_dir_all(root.join("photos")).unwrap();
+        fs::create_dir_all(root.join("videos")).unwrap();
+        fs::write(root.join("photos/img1.jpg"), "data").unwrap();
+        fs::write(root.join("photos/img2.jpg"), "data").unwrap();
+        fs::write(root.join("videos/vid1.mp4"), "data").unwrap();
+
+        // Create and populate database
+        let db = Database::open(&db_path).unwrap();
+        db.insert_directory("photos", None, None).unwrap();
+        db.insert_directory("videos", None, None).unwrap();
+
+        let photos_dir = db.get_directory_by_path("photos").unwrap().unwrap();
+        db.insert_file(photos_dir.id, "img1.jpg", 4, 0, Some("image")).unwrap();
+        db.insert_file(photos_dir.id, "img2.jpg", 4, 0, Some("image")).unwrap();
+
+        let videos_dir = db.get_directory_by_path("videos").unwrap().unwrap();
+        db.insert_file(videos_dir.id, "vid1.mp4", 4, 0, Some("video")).unwrap();
+
+        let state = AppState::new(root, db).unwrap();
+        (state, temp)
+    }
+
+    #[test]
+    fn test_app_state_move_down_wraps() {
+        // Keep _tempdir alive - dropping it deletes the test files
+let (mut state, _tempdir) = create_test_app_state();
+        state.focus = Focus::DirectoryTree;
+
+        // Move to last directory
+        state.tree.selected_index = state.get_visible_directories().len() - 1;
+
+        // Move down should wrap to top
+        state.move_down().unwrap();
+        assert_eq!(state.tree.selected_index, 0);
+    }
+
+    #[test]
+    fn test_app_state_move_up_wraps() {
+        // Keep _tempdir alive - dropping it deletes the test files
+let (mut state, _tempdir) = create_test_app_state();
+        state.focus = Focus::DirectoryTree;
+        state.tree.selected_index = 0;
+
+        // Move up should wrap to bottom
+        state.move_up().unwrap();
+        let visible_count = state.get_visible_directories().len();
+        assert_eq!(state.tree.selected_index, visible_count - 1);
+    }
+
+    #[test]
+    fn test_app_state_toggle_focus() {
+        // Keep _tempdir alive - dropping it deletes the test files
+let (mut state, _tempdir) = create_test_app_state();
+
+        assert_eq!(state.focus, Focus::DirectoryTree);
+        state.toggle_focus();
+        assert_eq!(state.focus, Focus::FileList);
+        state.toggle_focus();
+        assert_eq!(state.focus, Focus::DirectoryTree);
+    }
+
+    #[test]
+    fn test_app_state_set_rating_on_directory() {
+        // Keep _tempdir alive - dropping it deletes the test files
+let (mut state, _tempdir) = create_test_app_state();
+        state.focus = Focus::DirectoryTree;
+
+        state.set_rating(Some(4)).unwrap();
+
+        let dir = state.get_selected_directory().unwrap();
+        assert_eq!(dir.rating, Some(4));
+    }
+
+    #[test]
+    fn test_app_state_set_rating_on_file() {
+        // Keep _tempdir alive - dropping it deletes the test files
+let (mut state, _tempdir) = create_test_app_state();
+        state.focus = Focus::FileList;
+
+        // First ensure files are loaded
+        assert!(!state.file_list.files.is_empty());
+
+        state.set_rating(Some(3)).unwrap();
+
+        let file = state.file_list.selected_file().unwrap();
+        assert_eq!(file.file.rating, Some(3));
     }
 }

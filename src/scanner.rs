@@ -164,6 +164,40 @@ impl Scanner {
     }
 }
 
+/// Read EXIF orientation value from an image file.
+/// Returns orientation 1-8, or None if unavailable.
+fn get_exif_orientation(path: &Path) -> Option<u16> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bufreader = std::io::BufReader::new(file);
+    let exif = exif::Reader::new().read_from_container(&mut bufreader).ok()?;
+    let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+
+    match &field.value {
+        exif::Value::Short(vals) => vals.first().copied(),
+        _ => None,
+    }
+}
+
+/// Detect image orientation from dimensions, accounting for EXIF rotation.
+/// Returns "landscape" if width > height, "portrait" if height > width, None if square or error.
+pub fn detect_orientation(path: &Path) -> Option<&'static str> {
+    let size = imagesize::size(path).ok()?;
+    let (mut width, mut height) = (size.width, size.height);
+
+    // EXIF orientations 5-8 involve 90° rotation, swapping dimensions
+    if let Some(orientation) = get_exif_orientation(path) {
+        if (5..=8).contains(&orientation) {
+            std::mem::swap(&mut width, &mut height);
+        }
+    }
+
+    match width.cmp(&height) {
+        std::cmp::Ordering::Greater => Some("landscape"),
+        std::cmp::Ordering::Less => Some("portrait"),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
 /// Check if a directory entry is hidden (starts with .)
 /// Never considers the root entry (depth 0) as hidden.
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -345,5 +379,41 @@ mod tests {
         let files = scanner.scan_files();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].filename, "photo.jpg");
+    }
+
+    #[test]
+    fn test_detect_orientation_landscape() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("landscape.jpg");
+        let img = image::RgbImage::new(100, 50);
+        img.save(&path).unwrap();
+
+        assert_eq!(detect_orientation(&path), Some("landscape"));
+    }
+
+    #[test]
+    fn test_detect_orientation_portrait() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("portrait.jpg");
+        let img = image::RgbImage::new(50, 100);
+        img.save(&path).unwrap();
+
+        assert_eq!(detect_orientation(&path), Some("portrait"));
+    }
+
+    #[test]
+    fn test_detect_orientation_square() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("square.jpg");
+        let img = image::RgbImage::new(100, 100);
+        img.save(&path).unwrap();
+
+        assert_eq!(detect_orientation(&path), None);
+    }
+
+    #[test]
+    fn test_detect_orientation_nonexistent() {
+        let path = Path::new("/nonexistent/file.jpg");
+        assert_eq!(detect_orientation(path), None);
     }
 }
