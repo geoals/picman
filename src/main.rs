@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use picman::cli::{run_generate_previews, run_generate_thumbnails, run_init, run_list, run_rate, run_repair, run_sync, run_tag, ListOptions, TagOptions};
+use picman::logging::init_logging;
 use picman::tui::run_tui;
 use std::path::PathBuf;
 
@@ -14,6 +15,10 @@ struct Cli {
     /// Path to library (launches TUI if no subcommand)
     #[arg(global = true)]
     library: Option<PathBuf>,
+
+    /// Skip filesystem sync on TUI startup (faster, but won't detect changes)
+    #[arg(long)]
+    skip_sync: bool,
 }
 
 #[derive(Subcommand)]
@@ -113,6 +118,9 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Initialize logging - guard must be held for logs to flush
+    let _guard = init_logging().ok();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -241,7 +249,7 @@ fn main() -> Result<()> {
         None => {
             // Launch TUI
             let library = cli.library.unwrap_or_else(|| PathBuf::from("."));
-            run_tui(&library)?;
+            run_tui(&library, cli.skip_sync)?;
         }
     }
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tracing::{debug, info, instrument};
 
 use crate::db::Database;
 use crate::scanner::Scanner;
@@ -35,6 +36,7 @@ pub struct InitStats {
 }
 
 /// Populate the database from a scanner
+#[instrument(skip_all)]
 fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
     let mut stats = InitStats::default();
 
@@ -45,7 +47,7 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
     let mut dir_ids: HashMap<String, i64> = HashMap::new();
 
     // First pass: insert all directories
-    eprint!("[init] Scanning directories...");
+    info!("scanning directories");
     for dir in scanner.scan_directories() {
         let parent_id = dir
             .parent_relative_path
@@ -56,10 +58,10 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
         dir_ids.insert(dir.relative_path, id);
         stats.directories += 1;
     }
-    eprintln!(" {} directories", stats.directories);
+    info!(count = stats.directories, "directories scanned");
 
     // Second pass: insert all files
-    eprint!("[init] Scanning files...");
+    info!("scanning files");
     for file in scanner.scan_files() {
         // Get or create the directory for this file
         let dir_id = if file.directory.is_empty() {
@@ -95,11 +97,16 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
             crate::scanner::MediaType::Other => {}
         }
     }
-    eprintln!(" {} files ({} images, {} videos)", stats.files, stats.images, stats.videos);
+    info!(
+        files = stats.files,
+        images = stats.images,
+        videos = stats.videos,
+        "files scanned"
+    );
 
-    eprint!("[init] Committing to database...");
+    debug!("committing to database");
     db.commit()?;
-    eprintln!(" done");
+    info!("init complete");
 
     Ok(stats)
 }

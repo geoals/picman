@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use tracing::{debug, info, instrument, warn};
 
 use crate::db::Database;
 use crate::hash::compute_file_hash;
@@ -44,7 +44,25 @@ struct DirectoryMetadata {
 }
 
 /// Run the sync command: update database to match filesystem
+///
+/// If `incremental` is true, only scans files in directories whose mtime changed.
+/// This is much faster for large libraries on slow storage (HDD).
 pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag: bool) -> Result<SyncStats> {
+    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, false)
+}
+
+/// Run an incremental sync - only scan files in changed directories.
+/// Much faster than full sync on HDD.
+pub fn run_sync_incremental(library_path: &Path) -> Result<SyncStats> {
+    run_sync_impl(library_path, false, false, true)
+}
+
+fn run_sync_impl(
+    library_path: &Path,
+    compute_hashes: bool,
+    tag_orientation_flag: bool,
+    incremental: bool,
+) -> Result<SyncStats> {
     let library_path = library_path
         .canonicalize()
         .with_context(|| format!("Library path does not exist: {}", library_path.display()))?;
@@ -61,7 +79,11 @@ pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag:
         .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
 
     let scanner = Scanner::new(library_path.clone());
-    let mut stats = sync_database(&db, &scanner, &library_path)?;
+    let mut stats = if incremental {
+        sync_database_incremental(&db, &scanner, &library_path)?
+    } else {
+        sync_database(&db, &scanner, &library_path)?
+    };
 
     // Tag orientation for image files (only if requested)
     if tag_orientation_flag {
@@ -82,12 +104,12 @@ const HASH_BATCH_SIZE: usize = 1000;
 const ORIENTATION_BATCH_SIZE: usize = 5000;
 
 /// Detect image orientation and add landscape/portrait tags
+#[instrument(skip(db, library_path))]
 fn tag_orientation(db: &Database, library_path: &Path) -> Result<usize> {
-    print!("Finding images needing orientation...");
-    let _ = io::stdout().flush();
+    info!("finding images needing orientation");
     let files = db.get_files_needing_orientation()?;
     let total = files.len();
-    println!(" {}", total);
+    info!(total, "found images needing orientation");
 
     if total == 0 {
         return Ok(0);
@@ -119,19 +141,20 @@ fn tag_orientation(db: &Database, library_path: &Path) -> Result<usize> {
         db.commit()?;
 
         processed += batch.len();
-        print!("\rOrientation: {}/{}", processed, total);
-        let _ = io::stdout().flush();
+        debug!(processed, total, "orientation progress");
     }
 
-    println!(); // Newline after progress
+    info!(total_tagged, "orientation tagging complete");
 
     Ok(total_tagged)
 }
 
 /// Hash files that have NULL hash values
+#[instrument(skip(db, library_path))]
 fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
     let files_to_hash = db.get_files_needing_hash()?;
     let total = files_to_hash.len();
+    info!(total, "files needing hash");
 
     if total == 0 {
         return Ok((0, 0));
@@ -153,8 +176,7 @@ fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
                 let result = compute_file_hash(&full_path);
 
                 let current = batch_start + hashed_in_batch.fetch_add(1, Ordering::Relaxed) + 1;
-                print!("\rHashing: {}/{}", current, total);
-                let _ = io::stdout().flush();
+                debug!(current, total, "hashing progress");
 
                 (file.id, result)
             })
@@ -168,19 +190,229 @@ fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
                     total_hashed += 1;
                 }
                 Err(e) => {
-                    eprintln!("\nWarning: Failed to hash file: {}", e);
+                    warn!(error = %e, "failed to hash file");
                     total_errors += 1;
                 }
             }
         }
     }
 
-    println!(); // Newline after progress
+    info!(total_hashed, total_errors, "hashing complete");
 
     Ok((total_hashed, total_errors))
 }
 
+/// Incremental sync: only scan files in directories whose mtime changed.
+/// Much faster than full sync on HDD (2500 dir stats vs 93k file stats).
+#[instrument(skip_all)]
+fn sync_database_incremental(
+    db: &Database,
+    scanner: &Scanner,
+    _library_path: &Path,
+) -> Result<SyncStats> {
+    let mut stats = SyncStats::default();
+
+    db.begin_transaction()?;
+
+    // === Phase 1: Scan directories only (fast - no file stats) ===
+    info!("scanning directories only (incremental mode)");
+    let fs_dirs: HashMap<String, i64> = scanner
+        .scan_directories()
+        .map(|d| (d.relative_path, d.mtime))
+        .collect();
+    info!(dirs = fs_dirs.len(), "directory scan complete");
+
+    // === Phase 2: Load directories from database ===
+    debug!("loading directories from database");
+    let db_dirs: HashMap<String, (i64, Option<i64>)> = db
+        .get_all_directories()?
+        .into_iter()
+        .map(|d| (d.path, (d.id, d.mtime)))
+        .collect();
+
+    // === Phase 3: Determine which directories need file scanning ===
+    let mut dirs_to_scan_files: HashSet<String> = HashSet::new();
+
+    // New directories (in filesystem but not in DB)
+    for (path, _mtime) in &fs_dirs {
+        if !db_dirs.contains_key(path) {
+            dirs_to_scan_files.insert(path.clone());
+        }
+    }
+
+    // Directories with changed mtime
+    for (path, fs_mtime) in &fs_dirs {
+        if let Some((_id, db_mtime)) = db_dirs.get(path) {
+            if db_mtime.map(|m| m != *fs_mtime).unwrap_or(true) {
+                dirs_to_scan_files.insert(path.clone());
+            }
+        }
+    }
+
+    // Deleted directories (in DB but not in filesystem)
+    // Note: Skip "" directory (root-level files)
+    let dirs_to_delete: Vec<_> = db_dirs
+        .iter()
+        .filter(|(path, _)| !path.is_empty() && !fs_dirs.contains_key(*path))
+        .map(|(path, (id, _))| (path.clone(), *id))
+        .collect();
+
+    info!(
+        new_dirs = dirs_to_scan_files.len(),
+        deleted_dirs = dirs_to_delete.len(),
+        "incremental change detection complete"
+    );
+
+    // === Phase 4: If no changes detected, quick exit ===
+    if dirs_to_scan_files.is_empty() && dirs_to_delete.is_empty() {
+        debug!("no directory changes detected, skipping file scan");
+        db.commit()?;
+        return Ok(stats);
+    }
+
+    // === Phase 5: Scan files only in changed directories ===
+    let fs_files = if dirs_to_scan_files.is_empty() {
+        Vec::new()
+    } else {
+        info!(dirs = dirs_to_scan_files.len(), "scanning files in changed directories");
+        scanner.scan_files_in_directories(&dirs_to_scan_files)
+    };
+    debug!(files = fs_files.len(), "file scan complete");
+
+    // Build lookup for new files
+    let fs_file_set: HashSet<(String, String)> = fs_files
+        .iter()
+        .map(|f| (f.directory.clone(), f.filename.clone()))
+        .collect();
+
+    // === Phase 6: Handle deleted directories ===
+    // Delete files first (FK constraint), then directories
+    for (path, id) in &dirs_to_delete {
+        let files_in_dir = db.get_files_in_directory(*id)?;
+        for file in files_in_dir {
+            db.delete_file(file.id)?;
+            stats.files_removed += 1;
+        }
+        debug!(path, "deleted directory");
+    }
+
+    // Delete directories deepest first
+    let mut dirs_to_delete_sorted = dirs_to_delete;
+    dirs_to_delete_sorted.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+    for (_path, id) in dirs_to_delete_sorted {
+        db.delete_directory(id)?;
+        stats.directories_removed += 1;
+    }
+
+    // === Phase 7: Add new directories ===
+    let mut dir_path_to_id: HashMap<String, i64> = db_dirs
+        .iter()
+        .map(|(path, (id, _))| (path.clone(), *id))
+        .collect();
+
+    // Sort new directories by depth (parents first)
+    let mut new_dirs: Vec<_> = fs_dirs
+        .iter()
+        .filter(|(path, _)| !db_dirs.contains_key(*path))
+        .collect();
+    new_dirs.sort_by_key(|(path, _)| path.matches('/').count());
+
+    for (path, mtime) in new_dirs {
+        let parent_path = Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty());
+
+        let parent_id = parent_path.as_ref().and_then(|p| {
+            dir_path_to_id
+                .get(p)
+                .copied()
+                .or_else(|| db.get_directory_by_path(p).ok().flatten().map(|d| d.id))
+        });
+
+        let id = db.insert_directory(path, parent_id, Some(*mtime))?;
+        dir_path_to_id.insert(path.clone(), id);
+        stats.directories_added += 1;
+    }
+
+    // === Phase 8: Update mtime for existing directories that changed ===
+    for (path, fs_mtime) in &fs_dirs {
+        if let Some((id, db_mtime)) = db_dirs.get(path) {
+            if db_mtime.map(|m| m != *fs_mtime).unwrap_or(true) {
+                db.set_directory_mtime(*id, *fs_mtime)?;
+            }
+        }
+    }
+
+    // === Phase 9: Handle files in changed directories ===
+    // Delete files that no longer exist in scanned directories
+    for dir_path in &dirs_to_scan_files {
+        if let Some(id) = dir_path_to_id.get(dir_path) {
+            let db_files = db.get_files_in_directory(*id)?;
+            for file in db_files {
+                if !fs_file_set.contains(&(dir_path.clone(), file.filename.clone())) {
+                    db.delete_file(file.id)?;
+                    stats.files_removed += 1;
+                }
+            }
+        }
+    }
+
+    // Add/update files
+    for file in &fs_files {
+        let dir_id = if file.directory.is_empty() {
+            match db.get_directory_by_path("")? {
+                Some(d) => d.id,
+                None => {
+                    let id = db.insert_directory("", None, None)?;
+                    dir_path_to_id.insert(String::new(), id);
+                    id
+                }
+            }
+        } else {
+            *dir_path_to_id.get(&file.directory).unwrap_or(&0)
+        };
+
+        if dir_id == 0 {
+            continue;
+        }
+
+        match db.get_file_by_name(dir_id, &file.filename)? {
+            Some(db_file) => {
+                if db_file.mtime != file.mtime || db_file.size != file.size as i64 {
+                    db.update_file_metadata(db_file.id, file.size as i64, file.mtime)?;
+                    stats.files_modified += 1;
+                }
+            }
+            None => {
+                db.insert_file(
+                    dir_id,
+                    &file.filename,
+                    file.size as i64,
+                    file.mtime,
+                    Some(file.media_type.as_str()),
+                )?;
+                stats.files_added += 1;
+            }
+        }
+    }
+
+    debug!("committing to database");
+    db.commit()?;
+    info!(
+        dirs_added = stats.directories_added,
+        dirs_removed = stats.directories_removed,
+        files_added = stats.files_added,
+        files_removed = stats.files_removed,
+        files_modified = stats.files_modified,
+        "incremental sync complete"
+    );
+
+    Ok(stats)
+}
+
 /// Sync database with filesystem
+#[instrument(skip_all)]
 fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Result<SyncStats> {
     let mut stats = SyncStats::default();
 
@@ -188,35 +420,32 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
 
     // === Phase 1: Gather current state ===
 
-    // Get all directories from filesystem
-    eprint!("[sync] Scanning directories...");
-    let fs_dirs: HashMap<String, i64> = scanner
-        .scan_directories()
-        .map(|d| (d.relative_path, d.mtime))
+    // Single-pass filesystem scan for both directories and files
+    info!("scanning filesystem");
+    let scan_result = scanner.scan_all();
+    let fs_dirs: HashMap<String, i64> = scan_result
+        .directories
+        .iter()
+        .map(|d| (d.relative_path.clone(), d.mtime))
         .collect();
-    eprintln!(" {} found", fs_dirs.len());
+    let fs_files = scan_result.files;
+    info!(dirs = fs_dirs.len(), files = fs_files.len(), "scan complete");
 
     // Get all directories from database
-    eprint!("[sync] Loading directories from DB...");
+    debug!("loading directories from database");
     let db_dirs: HashMap<String, i64> = db.get_all_directories()?
         .into_iter()
         .map(|d| (d.path, d.id))
         .collect();
-    eprintln!(" {} loaded", db_dirs.len());
-
-    // Get all files from filesystem
-    eprint!("[sync] Scanning files...");
-    let fs_files: Vec<_> = scanner.scan_files();
-    eprintln!(" {} found", fs_files.len());
     let fs_file_set: HashSet<(String, String)> = fs_files
         .iter()
         .map(|f| (f.directory.clone(), f.filename.clone()))
         .collect();
 
     // Get all files from database
-    eprint!("[sync] Loading files from DB...");
+    debug!("loading files from database");
     let db_files = db.get_all_files()?;
-    eprintln!(" {} loaded", db_files.len());
+    debug!(count = db_files.len(), "loaded files from database");
 
     // Create lookup from directory_id to path
     let dir_id_to_path: HashMap<i64, String> = db.get_all_directories()?
@@ -225,7 +454,7 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
         .collect();
 
     // === Phase 2: Detect moved directories and collect metadata ===
-    eprint!("[sync] Detecting changes...");
+    debug!("detecting changes");
 
     // Find directories that will be deleted
     // Note: The "" directory represents root-level files and is never in the filesystem scan,
@@ -241,79 +470,90 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
         .filter(|path| !db_dirs.contains_key(*path))
         .collect();
 
-    // Collect metadata from directories being deleted, keyed by basename
-    // Also collect file metadata for preservation during moves
+    // Early exit optimization: skip expensive metadata collection if no directories to delete
     let mut deleted_metadata: HashMap<String, DirectoryMetadata> = HashMap::new();
-    for (path, &id) in &dirs_to_delete {
-        let dir = db.get_directory(id)?;
-        let dir_tags = db.get_directory_tags(id)?;
-        let files_in_dir = db.get_files_in_directory(id)?;
+    if !dirs_to_delete.is_empty() {
+        // Bulk-load all directory tags and file tags upfront (avoids N+1 queries)
+        let all_dir_tags = db.get_all_directory_tags()?;
+        let all_file_tags = db.get_all_file_tags()?;
 
-        let has_dir_metadata = dir.as_ref().map(|d| d.rating.is_some()).unwrap_or(false)
-            || !dir_tags.is_empty();
-        let has_files = !files_in_dir.is_empty();
+        // Collect metadata from directories being deleted, keyed by basename
+        // Also collect file metadata for preservation during moves
+        for (path, &id) in &dirs_to_delete {
+            let dir = db.get_directory(id)?;
+            let dir_tags = all_dir_tags.get(&id).cloned().unwrap_or_default();
+            let files_in_dir = db.get_files_in_directory(id)?;
 
-        // Preserve if has metadata OR has files (for thumbnail/metadata migration)
-        if has_dir_metadata || has_files {
-            let basename = Path::new(path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            let has_dir_metadata = dir.as_ref().map(|d| d.rating.is_some()).unwrap_or(false)
+                || !dir_tags.is_empty();
+            let has_files = !files_in_dir.is_empty();
 
-            // Check if this basename exists in new directories (potential move)
-            let matches_in_new: Vec<_> = new_dir_paths
-                .iter()
-                .filter(|p| {
-                    Path::new(*p)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .as_ref() == Some(&basename)
-                })
-                .collect();
+            // Preserve if has metadata OR has files (for thumbnail/metadata migration)
+            if has_dir_metadata || has_files {
+                let basename = Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-            // Only preserve if exactly one match (unambiguous move)
-            if matches_in_new.len() == 1 {
-                // Collect file metadata (ratings and tags) for each file
-                let mut files_metadata: HashMap<String, FileMetadata> = HashMap::new();
-                for file in files_in_dir {
-                    let file_tags = db.get_file_tags(file.id)?;
-                    // Only store if file has metadata worth preserving
-                    if file.rating.is_some() || !file_tags.is_empty() {
-                        files_metadata.insert(
-                            file.filename.clone(),
-                            FileMetadata {
-                                rating: file.rating,
-                                tags: file_tags,
-                            },
-                        );
-                    } else {
-                        // Still track file for thumbnail migration (with empty metadata)
-                        files_metadata.insert(
-                            file.filename.clone(),
-                            FileMetadata {
-                                rating: None,
-                                tags: Vec::new(),
-                            },
-                        );
+                // Check if this basename exists in new directories (potential move)
+                let matches_in_new: Vec<_> = new_dir_paths
+                    .iter()
+                    .filter(|p| {
+                        Path::new(*p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .as_ref() == Some(&basename)
+                    })
+                    .collect();
+
+                // Only preserve if exactly one match (unambiguous move)
+                if matches_in_new.len() == 1 {
+                    // Collect file metadata (ratings and tags) for each file
+                    let mut files_metadata: HashMap<String, FileMetadata> = HashMap::new();
+                    for file in files_in_dir {
+                        let file_tags = all_file_tags.get(&file.id).cloned().unwrap_or_default();
+                        // Only store if file has metadata worth preserving
+                        if file.rating.is_some() || !file_tags.is_empty() {
+                            files_metadata.insert(
+                                file.filename.clone(),
+                                FileMetadata {
+                                    rating: file.rating,
+                                    tags: file_tags,
+                                },
+                            );
+                        } else {
+                            // Still track file for thumbnail migration (with empty metadata)
+                            files_metadata.insert(
+                                file.filename.clone(),
+                                FileMetadata {
+                                    rating: None,
+                                    tags: Vec::new(),
+                                },
+                            );
+                        }
                     }
-                }
 
-                deleted_metadata.insert(
-                    basename,
-                    DirectoryMetadata {
-                        rating: dir.and_then(|d| d.rating),
-                        tags: dir_tags,
-                        files: files_metadata,
-                        old_path: path.to_string(),
-                    },
-                );
+                    deleted_metadata.insert(
+                        basename,
+                        DirectoryMetadata {
+                            rating: dir.and_then(|d| d.rating),
+                            tags: dir_tags,
+                            files: files_metadata,
+                            old_path: path.to_string(),
+                        },
+                    );
+                }
             }
         }
     }
-    eprintln!(" {} dirs to delete, {} new dirs", dirs_to_delete.len(), new_dir_paths.len());
+    info!(
+        dirs_to_delete = dirs_to_delete.len(),
+        dirs_to_add = new_dir_paths.len(),
+        "change detection complete"
+    );
 
     // === Phase 3: Delete removed items (files first due to FK constraint) ===
-    eprint!("[sync] Applying changes...");
+    debug!("applying changes");
 
     // Delete removed files
     for file in &db_files {
@@ -479,11 +719,19 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
         }
     }
-    eprintln!(" done");
+    debug!("changes applied");
 
-    eprint!("[sync] Committing to database...");
+    debug!("committing to database");
     db.commit()?;
-    eprintln!(" done");
+    info!(
+        dirs_added = stats.directories_added,
+        dirs_removed = stats.directories_removed,
+        dirs_moved = stats.directories_moved,
+        files_added = stats.files_added,
+        files_removed = stats.files_removed,
+        files_modified = stats.files_modified,
+        "sync complete"
+    );
 
     Ok(stats)
 }

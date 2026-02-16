@@ -8,58 +8,68 @@ use ratatui::prelude::*;
 use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
+use tracing::{debug, info, instrument};
 
-use crate::cli::{run_init, run_sync};
+use crate::cli::{run_init, run_sync_incremental};
 use crate::db::Database;
 
 use super::state::AppState;
 use super::ui::render;
 
 /// Run the TUI application
-pub fn run_tui(library_path: &Path) -> Result<()> {
+#[instrument(skip_all, fields(library = %library_path.display(), skip_sync))]
+pub fn run_tui(library_path: &Path, skip_sync: bool) -> Result<()> {
     let db_path = library_path.join(".picman.db");
     let mut status_parts = Vec::new();
 
-    eprintln!("[picman] Starting up...");
-    eprintln!("[picman] Library: {}", library_path.display());
+    info!("starting TUI");
 
     // Auto-init if no database exists
     if !db_path.exists() {
-        eprintln!("[picman] No database found, initializing...");
+        info!("no database found, initializing");
         let stats = run_init(library_path)?;
-        eprintln!("[picman] Init complete: {} dirs, {} files", stats.directories, stats.files);
+        info!(dirs = stats.directories, files = stats.files, "init complete");
         status_parts.push(format!(
             "Init: {} dirs, {} files",
             stats.directories, stats.files
         ));
     }
 
-    // Always sync on startup (fast mtime check)
-    eprintln!("[picman] Syncing database with filesystem...");
-    let sync_stats = run_sync(library_path, false, false)?;
-    let sync_changes = sync_stats.directories_added
-        + sync_stats.directories_removed
-        + sync_stats.files_added
-        + sync_stats.files_removed
-        + sync_stats.files_modified;
-    eprintln!("[picman] Sync complete: +{} -{} dirs, +{} -{} ~{} files",
-        sync_stats.directories_added, sync_stats.directories_removed,
-        sync_stats.files_added, sync_stats.files_removed, sync_stats.files_modified);
-    if sync_changes > 0 {
-        status_parts.push(format!(
-            "Sync: +{} -{} files",
-            sync_stats.files_added,
-            sync_stats.files_removed
-        ));
+    // Incremental sync on startup (unless --skip-sync)
+    if skip_sync {
+        info!("skipping sync (--skip-sync)");
+    } else {
+        info!("syncing database with filesystem (incremental)");
+        let sync_stats = run_sync_incremental(library_path)?;
+        let sync_changes = sync_stats.directories_added
+            + sync_stats.directories_removed
+            + sync_stats.files_added
+            + sync_stats.files_removed
+            + sync_stats.files_modified;
+        info!(
+            dirs_added = sync_stats.directories_added,
+            dirs_removed = sync_stats.directories_removed,
+            files_added = sync_stats.files_added,
+            files_removed = sync_stats.files_removed,
+            files_modified = sync_stats.files_modified,
+            "sync complete"
+        );
+        if sync_changes > 0 {
+            status_parts.push(format!(
+                "Sync: +{} -{} files",
+                sync_stats.files_added,
+                sync_stats.files_removed
+            ));
+        }
     }
 
-    eprintln!("[picman] Opening database...");
+    debug!("opening database");
     let db = Database::open(&db_path)?;
 
     // Initialize state
-    eprintln!("[picman] Loading directory tree...");
+    debug!("loading directory tree");
     let mut state = AppState::new(library_path.to_path_buf(), db)?;
-    eprintln!("[picman] Loaded {} directories", state.tree.directories.len());
+    info!(dirs = state.tree.directories.len(), "loaded directory tree");
 
     // Show startup status
     if !status_parts.is_empty() {
@@ -67,7 +77,7 @@ pub fn run_tui(library_path: &Path) -> Result<()> {
     }
 
     // Setup terminal
-    eprintln!("[picman] Setting up terminal...");
+    debug!("setting up terminal");
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;

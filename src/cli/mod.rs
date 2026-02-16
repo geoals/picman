@@ -12,6 +12,6 @@ pub use list::{run_list, FileInfo, ListOptions};
 pub use previews::run_generate_previews;
 pub use rate::run_rate;
 pub use repair::run_repair;
-pub use sync::run_sync;
+pub use sync::{run_sync, run_sync_incremental};
 pub use tag::{run_tag, TagOptions};
 pub use thumbnails::run_generate_thumbnails;

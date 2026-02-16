@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use rusqlite::{params, OptionalExtension};
+use tracing::{debug, instrument};
 
 use super::Database;
 
@@ -507,6 +508,7 @@ impl Database {
 
     /// Get all directory tags as a map (directory_id -> list of tag names)
     /// More efficient than calling get_directory_tags for each directory
+    #[instrument(skip(self))]
     pub fn get_all_directory_tags(&self) -> Result<std::collections::HashMap<i64, Vec<String>>> {
         use std::collections::HashMap;
 
@@ -527,6 +529,34 @@ impl Database {
             result.entry(dir_id).or_default().push(tag_name);
         }
 
+        debug!(count = result.len(), "loaded all directory tags");
+        Ok(result)
+    }
+
+    /// Get all file tags as a map (file_id -> list of tag names)
+    /// More efficient than calling get_file_tags for each file
+    #[instrument(skip(self))]
+    pub fn get_all_file_tags(&self) -> Result<std::collections::HashMap<i64, Vec<String>>> {
+        use std::collections::HashMap;
+
+        let mut stmt = self.connection().prepare(
+            "SELECT ft.file_id, t.name FROM file_tags ft
+             JOIN tags t ON ft.tag_id = t.id
+             ORDER BY ft.file_id, t.name",
+        )?;
+
+        let mut result: HashMap<i64, Vec<String>> = HashMap::new();
+
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (file_id, tag_name) = row?;
+            result.entry(file_id).or_default().push(tag_name);
+        }
+
+        debug!(count = result.len(), "loaded all file tags");
         Ok(result)
     }
 
@@ -660,6 +690,7 @@ impl Database {
     /// OR directories that themselves have matching tags.
     /// Also includes ancestor directories to maintain tree structure.
     /// For multiple tags, uses AND logic (must have ALL tags).
+    #[instrument(skip(self))]
     pub fn get_directories_with_matching_files(
         &self,
         rating_filter: crate::tui::state::RatingFilter,
@@ -819,6 +850,7 @@ impl Database {
 
         matching_dir_ids.extend(ancestors_to_add);
 
+        debug!(count = matching_dir_ids.len(), "found matching directories");
         Ok(matching_dir_ids)
     }
 
@@ -1375,6 +1407,40 @@ mod tests {
         assert!(result.contains(&beach_id));
         // photos should be included (ancestor, to maintain tree structure)
         assert!(result.contains(&photos_id));
+    }
+
+    #[test]
+    fn test_get_all_file_tags() {
+        let db = Database::open_in_memory().unwrap();
+
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        // Insert files with various tags
+        let file1_id = db.insert_file(dir_id, "photo1.jpg", 1024, 12345, Some("image")).unwrap();
+        let file2_id = db.insert_file(dir_id, "photo2.jpg", 1024, 12346, Some("image")).unwrap();
+        let file3_id = db.insert_file(dir_id, "photo3.jpg", 1024, 12347, Some("image")).unwrap();
+
+        db.add_file_tag(file1_id, "landscape").unwrap();
+        db.add_file_tag(file1_id, "vacation").unwrap();
+        db.add_file_tag(file2_id, "portrait").unwrap();
+        // file3 has no tags
+
+        // Get all file tags in one query
+        let all_tags = db.get_all_file_tags().unwrap();
+
+        // file1 should have 2 tags
+        let file1_tags = all_tags.get(&file1_id).unwrap();
+        assert_eq!(file1_tags.len(), 2);
+        assert!(file1_tags.contains(&"landscape".to_string()));
+        assert!(file1_tags.contains(&"vacation".to_string()));
+
+        // file2 should have 1 tag
+        let file2_tags = all_tags.get(&file2_id).unwrap();
+        assert_eq!(file2_tags.len(), 1);
+        assert!(file2_tags.contains(&"portrait".to_string()));
+
+        // file3 should not be in the map (no tags)
+        assert!(all_tags.get(&file3_id).is_none());
     }
 
     #[test]

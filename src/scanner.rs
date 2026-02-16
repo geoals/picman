@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tracing::{debug, instrument};
 use walkdir::{DirEntry, WalkDir};
 
 /// Media type classification based on file extension
@@ -65,6 +67,13 @@ pub struct ScannedDirectory {
     pub mtime: i64,
 }
 
+/// Result of a single-pass scan containing both directories and files
+#[derive(Debug, Default)]
+pub struct ScanResult {
+    pub directories: Vec<ScannedDirectory>,
+    pub files: Vec<ScannedFile>,
+}
+
 /// Scan a directory tree and yield files and directories
 pub struct Scanner {
     root: PathBuf,
@@ -101,6 +110,105 @@ impl Scanner {
                 files.push(scanned);
             }
         }
+        files
+    }
+
+    /// Scan all directories and files in a single WalkDir traversal.
+    /// More efficient than calling scan_directories() and scan_files() separately.
+    #[instrument(skip(self), fields(root = %self.root.display()))]
+    pub fn scan_all(&self) -> ScanResult {
+        let mut result = ScanResult::default();
+
+        for entry in WalkDir::new(&self.root)
+            .min_depth(1) // Skip root directory
+            .into_iter()
+            .filter_entry(|e| !is_hidden(e))
+        {
+            let Ok(entry) = entry else { continue };
+
+            if entry.file_type().is_dir() {
+                if let Some(dir) = self.make_scanned_directory(&entry) {
+                    result.directories.push(dir);
+                }
+            } else if entry.file_type().is_file() && is_media_file(entry.path()) {
+                if let Some(file) = self.make_scanned_file(&entry) {
+                    result.files.push(file);
+                }
+            }
+        }
+
+        debug!(
+            dirs = result.directories.len(),
+            files = result.files.len(),
+            "filesystem scan complete"
+        );
+
+        result
+    }
+
+    /// Scan files only in specific directories (by relative path).
+    /// Much faster than scan_all() when only a few directories changed.
+    #[instrument(skip(self, dirs_to_scan), fields(dir_count = dirs_to_scan.len()))]
+    pub fn scan_files_in_directories(&self, dirs_to_scan: &HashSet<String>) -> Vec<ScannedFile> {
+        let mut files = Vec::new();
+
+        for dir_path in dirs_to_scan {
+            let full_path = if dir_path.is_empty() {
+                self.root.clone()
+            } else {
+                self.root.join(dir_path)
+            };
+
+            let Ok(entries) = std::fs::read_dir(&full_path) else {
+                continue;
+            };
+
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if !is_media_file(&path) {
+                    continue;
+                }
+
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+
+                let filename = entry.file_name().to_string_lossy().to_string();
+                if filename.starts_with('.') {
+                    continue; // Skip hidden files
+                }
+
+                let relative_path = path
+                    .strip_prefix(&self.root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let size = metadata.len();
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+
+                let media_type = classify_media(&path);
+
+                files.push(ScannedFile {
+                    path,
+                    relative_path,
+                    filename,
+                    directory: dir_path.clone(),
+                    size,
+                    mtime,
+                    media_type,
+                });
+            }
+        }
+
+        debug!(files = files.len(), "scanned files in selected directories");
         files
     }
 
@@ -379,6 +487,38 @@ mod tests {
         let files = scanner.scan_files();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].filename, "photo.jpg");
+    }
+
+    #[test]
+    fn test_scan_all_single_pass() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create directory structure with files
+        fs::create_dir_all(root.join("photos/vacation")).unwrap();
+        fs::create_dir_all(root.join("videos")).unwrap();
+        fs::write(root.join("photos/image1.jpg"), "data").unwrap();
+        fs::write(root.join("photos/vacation/beach.jpg"), "data").unwrap();
+        fs::write(root.join("videos/clip.mp4"), "data").unwrap();
+        fs::write(root.join("photos/doc.txt"), "not media").unwrap();
+
+        let scanner = Scanner::new(root.to_path_buf());
+        let result = scanner.scan_all();
+
+        // Should find 3 directories
+        assert_eq!(result.directories.len(), 3);
+        let dir_paths: Vec<_> = result.directories.iter().map(|d| d.relative_path.as_str()).collect();
+        assert!(dir_paths.contains(&"photos"));
+        assert!(dir_paths.contains(&"photos/vacation"));
+        assert!(dir_paths.contains(&"videos"));
+
+        // Should find 3 media files (not the .txt)
+        assert_eq!(result.files.len(), 3);
+        let filenames: Vec<_> = result.files.iter().map(|f| f.filename.as_str()).collect();
+        assert!(filenames.contains(&"image1.jpg"));
+        assert!(filenames.contains(&"beach.jpg"));
+        assert!(filenames.contains(&"clip.mp4"));
+        assert!(!filenames.contains(&"doc.txt"));
     }
 
     #[test]
