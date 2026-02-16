@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use tracing::{debug, info, instrument, warn};
 
@@ -216,10 +217,23 @@ fn sync_database_incremental(
 
     // === Phase 1: Scan directories only (fast - no file stats) ===
     info!("scanning directories only (incremental mode)");
-    let fs_dirs: HashMap<String, i64> = scanner
-        .scan_directories()
-        .map(|d| (d.relative_path, d.mtime))
-        .collect();
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    spinner.set_message("Scanning directories...");
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let mut fs_dirs: HashMap<String, i64> = HashMap::new();
+    for dir in scanner.scan_directories() {
+        fs_dirs.insert(dir.relative_path, dir.mtime);
+        if fs_dirs.len() % 100 == 0 {
+            spinner.set_message(format!("Scanning directories... {}", fs_dirs.len()));
+        }
+    }
+    spinner.finish_with_message(format!("Scanned {} directories", fs_dirs.len()));
     info!(dirs = fs_dirs.len(), "directory scan complete");
 
     // === Phase 2: Load directories from database ===
@@ -275,7 +289,18 @@ fn sync_database_incremental(
         Vec::new()
     } else {
         info!(dirs = dirs_to_scan_files.len(), "scanning files in changed directories");
-        scanner.scan_files_in_directories(&dirs_to_scan_files)
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .unwrap(),
+        );
+        spinner.set_message(format!("Scanning files in {} directories...", dirs_to_scan_files.len()));
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let files = scanner.scan_files_in_directories(&dirs_to_scan_files);
+        spinner.finish_with_message(format!("Found {} files in {} directories", files.len(), dirs_to_scan_files.len()));
+        files
     };
     debug!(files = fs_files.len(), "file scan complete");
 
