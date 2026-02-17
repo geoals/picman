@@ -1,17 +1,19 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use ratatui_image::protocol::StatefulProtocol;
+use image::DynamicImage;
 
-/// Cached image preview state
+/// Cached image preview state — stores the decoded image behind an Arc
+/// so it can be cheaply shared with the background worker for protocol creation.
 pub struct PreviewCache {
     pub path: PathBuf,
-    pub protocol: Box<dyn StatefulProtocol>,
+    pub image: Arc<DynamicImage>,
 }
 
 impl PreviewCache {
-    pub fn new(path: PathBuf, protocol: Box<dyn StatefulProtocol>) -> Self {
-        Self { path, protocol }
+    pub fn new(path: PathBuf, image: Arc<DynamicImage>) -> Self {
+        Self { path, image }
     }
 }
 
@@ -37,7 +39,7 @@ impl LruPreviewCache {
     }
 
     /// Insert a preview into the cache, evicting oldest if over capacity
-    pub fn insert(&mut self, path: PathBuf, protocol: Box<dyn StatefulProtocol>) {
+    pub fn insert(&mut self, path: PathBuf, image: Arc<DynamicImage>) {
         // If already in cache, remove from access order (will re-add at end)
         if self.entries.contains_key(&path) {
             self.access_order.retain(|p| p != &path);
@@ -51,8 +53,13 @@ impl LruPreviewCache {
         }
 
         // Insert new entry
-        self.entries.insert(path.clone(), PreviewCache::new(path.clone(), protocol));
+        self.entries.insert(path.clone(), PreviewCache::new(path.clone(), image));
         self.access_order.push_back(path);
+    }
+
+    /// Get a cached preview without updating access order (read-only peek)
+    pub fn get(&self, path: &Path) -> Option<&PreviewCache> {
+        self.entries.get(path)
     }
 
     /// Get a cached preview, updating access order
@@ -88,6 +95,11 @@ impl LruPreviewCache {
         self.entries.is_empty()
     }
 
+    /// Maximum number of entries this cache can hold
+    pub fn max_size(&self) -> usize {
+        self.max_size
+    }
+
     /// Get the most recently accessed entry (for showing stale preview during rapid scroll)
     pub fn get_last_accessed_mut(&mut self) -> Option<&mut PreviewCache> {
         self.access_order.back().and_then(|path| self.entries.get_mut(path))
@@ -97,12 +109,12 @@ impl LruPreviewCache {
 /// Cached directory preview state (composite image)
 pub struct DirectoryPreviewCache {
     pub dir_id: i64,
-    pub protocol: Box<dyn StatefulProtocol>,
+    pub image: Arc<DynamicImage>,
 }
 
 impl DirectoryPreviewCache {
-    pub fn new(dir_id: i64, protocol: Box<dyn StatefulProtocol>) -> Self {
-        Self { dir_id, protocol }
+    pub fn new(dir_id: i64, image: Arc<DynamicImage>) -> Self {
+        Self { dir_id, image }
     }
 }
 
@@ -110,33 +122,8 @@ impl DirectoryPreviewCache {
 mod tests {
     use super::*;
 
-    /// Minimal mock implementing StatefulProtocol for unit tests.
-    /// Stores no real image data — just satisfies the trait bounds.
-    #[derive(Clone)]
-    struct MockProtocol;
-
-    impl StatefulProtocol for MockProtocol {
-        fn needs_resize(
-            &mut self,
-            _resize: &ratatui_image::Resize,
-            _area: ratatui::layout::Rect,
-        ) -> Option<ratatui::layout::Rect> {
-            None
-        }
-
-        fn resize_encode(
-            &mut self,
-            _resize: &ratatui_image::Resize,
-            _background_color: Option<image::Rgb<u8>>,
-            _area: ratatui::layout::Rect,
-        ) {
-        }
-
-        fn render(&mut self, _area: ratatui::layout::Rect, _buf: &mut ratatui::buffer::Buffer) {}
-    }
-
-    fn mock_protocol() -> Box<dyn StatefulProtocol> {
-        Box::new(MockProtocol)
+    fn mock_image() -> Arc<DynamicImage> {
+        Arc::new(DynamicImage::new_rgb8(1, 1))
     }
 
     #[test]
@@ -151,13 +138,13 @@ mod tests {
     fn test_lru_eviction() {
         let mut cache = LruPreviewCache::new(3);
 
-        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
-        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
-        cache.insert(PathBuf::from("c.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("a.jpg"), mock_image());
+        cache.insert(PathBuf::from("b.jpg"), mock_image());
+        cache.insert(PathBuf::from("c.jpg"), mock_image());
         assert_eq!(cache.len(), 3);
 
         // Inserting a 4th should evict the oldest ("a.jpg")
-        cache.insert(PathBuf::from("d.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("d.jpg"), mock_image());
         assert_eq!(cache.len(), 3);
         assert!(!cache.contains(&PathBuf::from("a.jpg")));
         assert!(cache.contains(&PathBuf::from("b.jpg")));
@@ -169,15 +156,15 @@ mod tests {
     fn test_lru_access_order() {
         let mut cache = LruPreviewCache::new(3);
 
-        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
-        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
-        cache.insert(PathBuf::from("c.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("a.jpg"), mock_image());
+        cache.insert(PathBuf::from("b.jpg"), mock_image());
+        cache.insert(PathBuf::from("c.jpg"), mock_image());
 
         // Access "a.jpg" — makes it most-recently-used
         cache.get_mut(Path::new("a.jpg"));
 
         // Insert a 4th — should evict "b.jpg" (the least recently used)
-        cache.insert(PathBuf::from("d.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("d.jpg"), mock_image());
         assert_eq!(cache.len(), 3);
         assert!(cache.contains(&PathBuf::from("a.jpg")));
         assert!(!cache.contains(&PathBuf::from("b.jpg")));
@@ -189,8 +176,8 @@ mod tests {
     fn test_get_last_accessed() {
         let mut cache = LruPreviewCache::new(3);
 
-        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
-        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("a.jpg"), mock_image());
+        cache.insert(PathBuf::from("b.jpg"), mock_image());
 
         // Last inserted is "b.jpg"
         let last = cache.get_last_accessed_mut().unwrap();

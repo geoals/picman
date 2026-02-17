@@ -7,6 +7,8 @@ use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, TableState};
 
+use ratatui_image::protocol::StatefulProtocol;
+
 use crate::db::{Database, Directory, File};
 use crate::suggestions::extract_suggested_words;
 use crate::tui::preview_loader::PreviewLoader;
@@ -149,8 +151,8 @@ impl FileListState {
     }
 }
 
-/// Default LRU cache size (~200 decoded images, ~1GB memory)
-const DEFAULT_PREVIEW_CACHE_SIZE: usize = 200;
+/// Default LRU cache size (10 decoded images, ~50MB memory at 1920×1440)
+const DEFAULT_PREVIEW_CACHE_SIZE: usize = 10;
 
 /// Main application state
 pub struct AppState {
@@ -193,6 +195,12 @@ pub struct AppState {
     /// Layout rects saved each frame for mouse hit-testing
     pub tree_area: Rect,
     pub file_list_area: Rect,
+    /// Active render protocol for file preview — reused across frames for the same image.
+    /// Only replaced when navigating to a different file whose image is cached.
+    /// This avoids both Kitty image ID saturation and per-frame flickering.
+    pub render_protocol: RefCell<Option<(PathBuf, Box<dyn StatefulProtocol>)>>,
+    /// Active render protocol for directory composite preview.
+    pub dir_render_protocol: RefCell<Option<(i64, Box<dyn StatefulProtocol>)>>,
 }
 
 impl AppState {
@@ -226,6 +234,8 @@ impl AppState {
             force_redraw: false,
             tree_area: Rect::default(),
             file_list_area: Rect::default(),
+            render_protocol: RefCell::new(None),
+            dir_render_protocol: RefCell::new(None),
         };
 
         // Load files for initial selection
@@ -417,10 +427,18 @@ impl AppState {
     /// Also preloads other files in the current directory.
     pub fn poll_preview_results(&self) {
         let results = self.preview_loader.borrow_mut().poll_results();
+        let selected_path = self.selected_file_path();
 
         for result in results {
+            if let Some(image) = result.image {
+                self.preview_cache.borrow_mut().insert(result.path.clone(), image);
+            }
+            // Only update render_protocol if this result is for the currently selected file.
+            // Discards stale protocols from rapid navigation (A→B→C).
             if let Some(protocol) = result.protocol {
-                self.preview_cache.borrow_mut().insert(result.path, protocol);
+                if selected_path.as_ref() == Some(&result.path) {
+                    *self.render_protocol.borrow_mut() = Some((result.path, protocol));
+                }
             }
         }
 
@@ -429,7 +447,14 @@ impl AppState {
         self.preload_directory_files();
     }
 
-    /// Preload all image/video files in the current directory that aren't already cached or pending.
+    /// Preload image/video files near the selected file in the current directory.
+    ///
+    /// Starts from the selected index and wraps forward, so the selected file is
+    /// always first in the queue. Limits total pending to the LRU cache size to
+    /// avoid wasted decode work and the infinite preload-evict-requeue loop.
+    ///
+    /// When the selection moves to an uncached file, bumps the load generation
+    /// so the worker skips stale requests from the previous position instantly.
     fn preload_directory_files(&self) {
         use crate::thumbnails::get_preview_path_for_file;
 
@@ -445,21 +470,49 @@ impl AppState {
 
         let mut loader = self.preview_loader.borrow_mut();
         let cache = self.preview_cache.borrow();
+        let total = self.file_list.files.len();
+        if total == 0 {
+            return;
+        }
 
-        for file_with_tags in &self.file_list.files {
+        let selected_idx = self.file_list.selected_index;
+        let max_pending = cache.max_size();
+
+        // If selected file isn't cached, bump generation to invalidate stale
+        // preloads from a previous position — the worker skips them instantly.
+        let selected_file = &self.file_list.files[selected_idx];
+        let selected_path = if dir.path.is_empty() {
+            self.library_path.join(&selected_file.file.filename)
+        } else {
+            self.library_path
+                .join(&dir.path)
+                .join(&selected_file.file.filename)
+        };
+        if !cache.contains(&selected_path) && !loader.is_pending(&selected_path) {
+            loader.bump_load_generation();
+        }
+
+        // Queue files starting from selected index, wrapping around.
+        // Selected file is always first → processed before neighbors.
+        let indices = (selected_idx..total).chain(0..selected_idx);
+        for idx in indices {
+            if loader.pending_count() >= max_pending {
+                break;
+            }
+
+            let file_with_tags = &self.file_list.files[idx];
             let file_path = if dir.path.is_empty() {
                 self.library_path.join(&file_with_tags.file.filename)
             } else {
-                self.library_path.join(&dir.path).join(&file_with_tags.file.filename)
+                self.library_path
+                    .join(&dir.path)
+                    .join(&file_with_tags.file.filename)
             };
 
-            // Skip if already cached or pending
             if cache.contains(&file_path) || loader.is_pending(&file_path) {
                 continue;
             }
 
-            // Determine preview path (thumbnail or original)
-            // Skip if no preview available (non-image/video file or missing video thumbnail)
             let (preview_path, is_thumbnail) = match get_preview_path_for_file(&file_path) {
                 Some(result) => result,
                 None => continue,
@@ -1191,6 +1244,8 @@ impl AppState {
         // Invalidate caches
         self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
+        *self.render_protocol.borrow_mut() = None;
+        *self.dir_render_protocol.borrow_mut() = None;
 
         Ok(())
     }

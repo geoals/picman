@@ -15,7 +15,7 @@ use tracing::{debug, info, instrument};
 use crate::cli::{run_init, run_sync_incremental};
 use crate::db::Database;
 
-use super::state::AppState;
+use super::state::{AppState, Focus};
 use super::ui::render;
 
 /// Run the TUI application
@@ -131,9 +131,26 @@ fn run_app(
 
         terminal.draw(|frame| render(frame, state))?;
 
-        // Use shorter timeout when background work is happening to update progress
+        // Use shorter timeout when we're waiting for async work:
+        // - Background operations (thumbnails, hashing): 100ms for progress updates
+        // - Pending preview: 50ms so the worker result is picked up promptly
+        // - Idle: 1 second to save CPU
+        let preview_ready = match state.focus {
+            Focus::FileList => match state.selected_file_path() {
+                Some(sel) => state
+                    .render_protocol
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|(path, _)| *path == sel),
+                None => true,
+            },
+            _ => true,
+        };
+
         let timeout = if state.background_progress.is_some() {
             Duration::from_millis(100)
+        } else if !preview_ready {
+            Duration::from_millis(5)
         } else {
             Duration::from_secs(1)
         };
