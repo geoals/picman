@@ -433,11 +433,16 @@ impl AppState {
             if let Some(image) = result.image {
                 self.preview_cache.borrow_mut().insert(result.path.clone(), image);
             }
-            // Only update render_protocol if this result is for the currently selected file.
-            // Discards stale protocols from rapid navigation (A→B→C).
+            // Only update render_protocol if this result is for the currently selected file
+            // AND no matching protocol exists yet. Replacing an active protocol with a new
+            // one for the same file causes a visible flash as the terminal destroys the old
+            // image and re-sends the new one.
             if let Some(protocol) = result.protocol {
                 if selected_path.as_ref() == Some(&result.path) {
-                    *self.render_protocol.borrow_mut() = Some((result.path, protocol));
+                    let mut proto = self.render_protocol.borrow_mut();
+                    if !proto.as_ref().is_some_and(|(p, _)| *p == result.path) {
+                        *proto = Some((result.path, protocol));
+                    }
                 }
             }
         }
@@ -480,6 +485,10 @@ impl AppState {
 
         // If selected file isn't cached, bump generation to invalidate stale
         // preloads from a previous position — the worker skips them instantly.
+        // BUT: if the render protocol already matches, the selected file is still
+        // displaying fine (the decode cache evicted it, but the protocol is the
+        // final product). Don't re-queue or we'll replace the active protocol and
+        // cause a flash.
         let selected_file = &self.file_list.files[selected_idx];
         let selected_path = if dir.path.is_empty() {
             self.library_path.join(&selected_file.file.filename)
@@ -488,7 +497,16 @@ impl AppState {
                 .join(&dir.path)
                 .join(&selected_file.file.filename)
         };
-        if !cache.contains(&selected_path) && !loader.is_pending(&selected_path) {
+        let selected_proto_matches = self
+            .render_protocol
+            .borrow()
+            .as_ref()
+            .is_some_and(|(path, _)| *path == selected_path);
+
+        if !cache.contains(&selected_path)
+            && !loader.is_pending(&selected_path)
+            && !selected_proto_matches
+        {
             loader.bump_load_generation();
         }
 
@@ -513,12 +531,19 @@ impl AppState {
                 continue;
             }
 
+            // Skip selected file if its protocol is already active — no need to
+            // re-decode just because the LRU cache evicted the intermediate image.
+            if idx == selected_idx && selected_proto_matches {
+                continue;
+            }
+
             let (preview_path, is_thumbnail) = match get_preview_path_for_file(&file_path) {
                 Some(result) => result,
                 None => continue,
             };
 
-            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id);
+            let is_selected = idx == selected_idx;
+            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id, is_selected);
         }
     }
 
