@@ -9,23 +9,25 @@
 :root {
     --sidebar-width: 280px;
     --toolbar-height: 48px;
-    --bg: #1a1a1a;
-    --bg-surface: #242424;
-    --bg-hover: #2e2e2e;
-    --bg-active: #383838;
-    --text: #e0e0e0;
-    --text-muted: #888;
-    --accent: #5b9bd5;
-    --accent-hover: #7bb3e0;
-    --border: #333;
-    --rating-color: #f5c518;
-    --tag-color: #6bc76b;
-    --scrollbar-thumb: #444;
+
+    /* Darkroom palette — warm charcoal studio */
+    --bg: #141210;
+    --bg-surface: #1c1a17;
+    --bg-hover: #262320;
+    --bg-active: #312e2a;
+    --text: #c9c2b8;
+    --text-muted: #756e64;
+    --accent: #b8866a;
+    --accent-hover: #cfa07f;
+    --border: #2a2724;
+    --rating-color: #c9a44e;
+    --tag-color: #6d9e87;
+    --scrollbar-thumb: #3a3632;
     --scrollbar-track: transparent;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
     background: var(--bg);
     color: var(--text);
     overflow: hidden;
@@ -52,11 +54,14 @@ body {
 }
 
 #sidebar h1 {
-    font-size: 1.1rem;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
+    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 14px 16px;
+    border-bottom: 2px solid var(--accent);
     color: var(--accent);
-    letter-spacing: 0.5px;
+    letter-spacing: 1.5px;
+    text-transform: lowercase;
 }
 
 #filters {
@@ -68,10 +73,10 @@ body {
 }
 
 #filters label {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
 }
 
 #filters select,
@@ -102,13 +107,15 @@ body {
 .dir-item {
     display: flex;
     align-items: center;
-    padding: 3px 8px;
+    padding: 4px 8px;
     cursor: pointer;
     font-size: 0.85rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     user-select: none;
+    border-left: 3px solid transparent;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
 
 .dir-item:hover {
@@ -117,6 +124,7 @@ body {
 
 .dir-item.selected {
     background: var(--bg-active);
+    border-left-color: var(--accent);
     color: var(--accent);
 }
 
@@ -175,6 +183,7 @@ body {
 
 #breadcrumb span {
     cursor: pointer;
+    transition: color 0.1s;
 }
 
 #breadcrumb span:hover {
@@ -204,7 +213,7 @@ body {
 
 .zoom-controls button {
     background: var(--bg);
-    color: var(--text);
+    color: var(--text-muted);
     border: 1px solid var(--border);
     border-radius: 4px;
     width: 28px;
@@ -215,6 +224,7 @@ body {
     align-items: center;
     justify-content: center;
     line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
 }
 
 .zoom-controls button:hover {
@@ -229,7 +239,7 @@ body {
 
 .zoom-controls button:disabled:hover {
     border-color: var(--border);
-    color: var(--text);
+    color: var(--text-muted);
 }
 
 /* ==================== Directory Rating & Tags (Toolbar) ==================== */
@@ -245,7 +255,7 @@ body {
     font-size: 1rem;
     cursor: pointer;
     color: var(--text-muted);
-    transition: color 0.1s;
+    transition: color 0.15s;
     user-select: none;
     line-height: 1;
 }
@@ -281,9 +291,10 @@ body {
     color: var(--tag-color);
     font-size: 0.75rem;
     padding: 2px 6px;
-    border-radius: 10px;
+    border-radius: 12px;
     white-space: nowrap;
     border: 1px solid transparent;
+    transition: border-color 0.1s;
 }
 
 .dir-tag-chip:hover {
@@ -293,9 +304,10 @@ body {
 .dir-tag-chip .remove-tag {
     cursor: pointer;
     font-size: 0.65rem;
-    opacity: 0.6;
+    opacity: 0.5;
     margin-left: 2px;
     line-height: 1;
+    transition: opacity 0.1s;
 }
 
 .dir-tag-chip .remove-tag:hover {
@@ -316,6 +328,7 @@ body {
     justify-content: center;
     flex-shrink: 0;
     line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
 }
 
 .dir-tag-add:hover {
@@ -357,6 +370,7 @@ body {
     font-size: 0.75rem;
     color: var(--tag-color);
     cursor: pointer;
+    transition: background 0.1s;
 }
 
 .dir-tag-suggestions .suggestion:hover,
@@ -374,7 +388,7 @@ body {
 
 .photo-grid {
     display: flex;
-    gap: 4px;
+    gap: 5px;
 }
 
 .photo-column {
@@ -382,7 +396,7 @@ body {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
 }
 
 .photo-cell {
@@ -390,7 +404,7 @@ body {
     overflow: hidden;
     cursor: pointer;
     background: var(--bg-surface);
-    border-radius: 2px;
+    border-radius: 3px;
     line-height: 0; /* Remove gap below inline img */
 }
 
@@ -398,11 +412,12 @@ body {
     width: 100%;
     height: auto;
     display: block;
-    transition: transform 0.15s ease;
+    transition: transform 0.2s ease, filter 0.2s ease;
 }
 
 .photo-cell:hover img {
-    transform: scale(1.03);
+    transform: scale(1.02);
+    filter: brightness(1.08);
 }
 
 .photo-cell .overlay {
@@ -411,9 +426,9 @@ body {
     left: 0;
     right: 0;
     padding: 4px 6px;
-    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    background: linear-gradient(transparent, rgba(20, 18, 16, 0.8));
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.2s ease;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
@@ -426,7 +441,7 @@ body {
 
 .photo-cell .filename {
     font-size: 0.7rem;
-    color: #ccc;
+    color: #b0a99f;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -444,11 +459,12 @@ body {
     position: absolute;
     top: 6px;
     right: 6px;
-    background: rgba(0,0,0,0.6);
-    color: #fff;
+    background: rgba(20, 18, 16, 0.7);
+    color: #b0a99f;
     font-size: 0.65rem;
-    padding: 2px 5px;
+    padding: 2px 6px;
     border-radius: 3px;
+    letter-spacing: 0.3px;
 }
 
 /* ==================== Tag Chips ==================== */
@@ -465,9 +481,10 @@ body {
     color: var(--tag-color);
     font-size: 0.75rem;
     padding: 2px 8px;
-    border-radius: 10px;
+    border-radius: 12px;
     cursor: pointer;
     border: 1px solid transparent;
+    transition: border-color 0.1s, background 0.1s, color 0.1s;
 }
 
 .tag-chip:hover {
@@ -485,7 +502,7 @@ body {
 #lightbox {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.92);
+    background: rgba(10, 9, 8, 0.95);
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -508,8 +525,8 @@ body {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    background: rgba(0,0,0,0.5);
-    color: #fff;
+    background: rgba(20, 18, 16, 0.6);
+    color: #b0a99f;
     border: none;
     font-size: 2rem;
     padding: 16px 12px;
@@ -520,6 +537,7 @@ body {
 
 #lightbox .nav-btn:hover {
     opacity: 1;
+    color: #fff;
 }
 
 #lightbox .nav-prev { left: 0; }
@@ -531,14 +549,16 @@ body {
     right: 16px;
     background: none;
     border: none;
-    color: #fff;
+    color: #b0a99f;
     font-size: 1.5rem;
     cursor: pointer;
     opacity: 0.6;
+    transition: opacity 0.15s;
 }
 
 #lightbox .close-btn:hover {
     opacity: 1;
+    color: #fff;
 }
 
 #lightbox .lightbox-toolbar {
@@ -561,18 +581,18 @@ body {
 
 #lightbox .lightbox-toolbar .toolbar-btn {
     pointer-events: auto;
-    background: rgba(0, 0, 0, 0.5);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(20, 18, 16, 0.6);
+    color: #b0a99f;
+    border: 1px solid rgba(176, 169, 159, 0.2);
     border-radius: 20px;
     padding: 6px 16px;
     font-size: 0.8rem;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 #lightbox .lightbox-toolbar .toolbar-btn:hover {
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(20, 18, 16, 0.8);
     border-color: var(--accent);
     color: var(--accent);
 }
@@ -583,7 +603,7 @@ body {
     left: 0;
     right: 0;
     padding: 12px 16px;
-    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    background: linear-gradient(transparent, rgba(10, 9, 8, 0.85));
     display: flex;
     align-items: center;
     gap: 12px;
@@ -635,7 +655,7 @@ body {
 /* ==================== Scrollbars ==================== */
 
 ::-webkit-scrollbar {
-    width: 8px;
+    width: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -644,9 +664,9 @@ body {
 
 ::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #555;
+    background: #4a4540;
 }
