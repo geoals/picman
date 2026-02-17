@@ -155,45 +155,64 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    let help_text = r#"
-  Key Bindings
+    fn key_line(key: &str, desc: &str, key_width: usize) -> Line<'static> {
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                format!("{:<width$}", key, width = key_width),
+                Style::default().fg(FOCUS_COLOR),
+            ),
+            Span::raw(desc.to_string()),
+        ])
+    }
 
-  Navigation:
-    j/↓      Move down
-    k/↑      Move up
-    h/←      Collapse/Left pane
-    l/→      Expand/Right pane
-    Tab      Switch focus
+    let section = Style::default()
+        .fg(HEADER_COLOR)
+        .add_modifier(Modifier::BOLD);
 
-  Actions:
-    Enter    Open file / Select dir
-    1-5/asdfg Set rating
-    0        Clear rating
-    t        Add tag
-    r        Rename directory
-    o        Operations menu
-    m        Filter
-    ?        Toggle help
-    q        Quit
-
-  Mouse:
-    Click        Select item / focus pane
-    Double-click Open/expand (= Enter)
-    Scroll wheel Move selection up/down
-"#;
+    let lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled("  Key Bindings", section)),
+        Line::from(""),
+        Line::from(Span::styled("  Navigation:", section)),
+        key_line("j/↓", "Move down", 10),
+        key_line("k/↑", "Move up", 10),
+        key_line("h/←", "Collapse/Left pane", 10),
+        key_line("l/→", "Expand/Right pane", 10),
+        key_line("Tab", "Switch focus", 10),
+        Line::from(""),
+        Line::from(Span::styled("  Actions:", section)),
+        key_line("Enter", "Open file / Select dir", 10),
+        key_line("1-5/asdfg", "Set rating", 10),
+        key_line("0", "Clear rating", 10),
+        key_line("t", "Add tag", 10),
+        key_line("r", "Rename directory", 10),
+        key_line("o", "Operations menu", 10),
+        key_line("m", "Filter", 10),
+        key_line("?", "Toggle help", 10),
+        key_line("q", "Quit", 10),
+        Line::from(""),
+        Line::from(Span::styled("  Mouse:", section)),
+        key_line("Click", "Select item / focus pane", 13),
+        key_line("Double-click", "Open/expand (= Enter)", 13),
+        key_line("Scroll wheel", "Move selection up/down", 13),
+    ];
 
     let help_width = 42;
-    let help_height = 22;
+    let help_height = 27;
     let x = (area.width.saturating_sub(help_width)) / 2;
     let y = (area.height.saturating_sub(help_height)) / 2;
 
     let help_area = Rect::new(x, y, help_width, help_height);
 
-    // Clear the area behind the popup
     frame.render_widget(Clear, help_area);
 
-    let help = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title(" Help "));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Help ")
+        .title_style(Style::default().fg(HEADER_COLOR).add_modifier(Modifier::BOLD));
+
+    let help = Paragraph::new(lines).block(block);
 
     frame.render_widget(help, help_area);
 }
