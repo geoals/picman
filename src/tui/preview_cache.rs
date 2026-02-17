@@ -124,18 +124,6 @@ impl LruPreviewCache {
     }
 }
 
-/// Cached directory preview state (composite image)
-pub struct DirectoryPreviewCache {
-    pub dir_id: i64,
-    pub image: Arc<DynamicImage>,
-}
-
-impl DirectoryPreviewCache {
-    pub fn new(dir_id: i64, image: Arc<DynamicImage>) -> Self {
-        Self { dir_id, image }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

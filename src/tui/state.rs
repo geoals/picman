@@ -17,7 +17,7 @@ pub use super::dialogs::{
     RenameDialogState, TagInputState,
 };
 pub use super::operations::{BackgroundProgress, OperationType};
-pub use super::preview_cache::{DirectoryPreviewCache, LruPreviewCache};
+pub use super::preview_cache::LruPreviewCache;
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,12 +149,12 @@ impl FileListState {
     }
 }
 
-/// Default LRU cache size. Each entry holds a decoded `Arc<DynamicImage>` plus
-/// a `Box<dyn StatefulProtocol>` (which clones the image internally). At ~22MB
-/// per entry worst case (1920×1440 RGBA × 2), 50 entries ≈ 1.1GB client RAM
-/// and ≈ 50 images in the terminal's graphics cache. Stays well within Kitty's
-/// default 320MB image cache limit.
+/// Default LRU cache size for file previews.
 const DEFAULT_PREVIEW_CACHE_SIZE: usize = 50;
+
+/// Default LRU cache size for directory composite previews.
+/// These are larger images (~12 thumbnails composited) so we keep fewer.
+const DEFAULT_DIR_PREVIEW_CACHE_SIZE: usize = 20;
 
 /// Main application state
 pub struct AppState {
@@ -165,7 +165,7 @@ pub struct AppState {
     pub file_list: FileListState,
     pub show_help: bool,
     pub preview_cache: RefCell<LruPreviewCache>,
-    pub directory_preview_cache: RefCell<Option<DirectoryPreviewCache>>,
+    pub dir_preview_cache: RefCell<LruPreviewCache>,
     pub tag_input: Option<TagInputState>,
     pub filter_dialog: Option<FilterDialogState>,
     pub rename_dialog: Option<RenameDialogState>,
@@ -202,8 +202,6 @@ pub struct AppState {
     /// as a fallback reference during rapid navigation (skip_preview) so we know
     /// which cached protocol to keep showing.
     pub render_protocol: RefCell<Option<PathBuf>>,
-    /// Active render protocol for directory composite preview.
-    pub dir_render_protocol: RefCell<Option<(i64, Box<dyn ratatui_image::protocol::StatefulProtocol>)>>,
 }
 
 impl AppState {
@@ -219,7 +217,7 @@ impl AppState {
             file_list: FileListState::new(),
             show_help: false,
             preview_cache: RefCell::new(LruPreviewCache::new(DEFAULT_PREVIEW_CACHE_SIZE)),
-            directory_preview_cache: RefCell::new(None),
+            dir_preview_cache: RefCell::new(LruPreviewCache::new(DEFAULT_DIR_PREVIEW_CACHE_SIZE)),
             tag_input: None,
             filter_dialog: None,
             rename_dialog: None,
@@ -238,7 +236,6 @@ impl AppState {
             tree_area: Rect::default(),
             file_list_area: Rect::default(),
             render_protocol: RefCell::new(None),
-            dir_render_protocol: RefCell::new(None),
         };
 
         // Load files for initial selection
@@ -1246,9 +1243,8 @@ impl AppState {
 
         // Invalidate caches (protocols are in preview_cache, cleared with it)
         self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.dir_preview_cache.borrow_mut().clear();
         *self.render_protocol.borrow_mut() = None;
-        *self.dir_render_protocol.borrow_mut() = None;
 
         Ok(())
     }

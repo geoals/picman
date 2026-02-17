@@ -353,7 +353,7 @@ impl AppState {
         if operation == OperationType::DirPreview {
             generate_dir_preview(self, &dir_data[0]);
             // Clear cache to reload
-            *self.directory_preview_cache.borrow_mut() = None;
+            self.dir_preview_cache.borrow_mut().clear();
             self.status_message = Some("Dir preview generated".to_string());
             return;
         }

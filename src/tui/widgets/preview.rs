@@ -14,7 +14,7 @@ use crate::thumbnails::{
     get_preview_path_for_file, is_image_file,
 };
 use crate::tui::colors::UNFOCUS_COLOR;
-use crate::tui::state::{AppState, DirectoryPreviewCache, Focus};
+use crate::tui::state::{AppState, Focus};
 
 // Global picker (created once, thread-safe)
 static PICKER: OnceLock<Mutex<Option<Picker>>> = OnceLock::new();
@@ -158,6 +158,12 @@ pub fn generate_dir_preview(state: &AppState, dir: &Directory) -> Option<PathBuf
 
 // ==================== TUI Rendering ====================
 
+/// Build a synthetic cache key for directory previews.
+/// Uses a prefix that can never collide with real file paths.
+fn dir_cache_key(dir_id: i64) -> PathBuf {
+    PathBuf::from(format!("\0dir/{}", dir_id))
+}
+
 /// Render directory preview (composite image from directory samples)
 fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = Block::default()
@@ -181,54 +187,53 @@ fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block.clone(), area);
 
-    // Check in-memory cache
-    let mut cache = state.directory_preview_cache.borrow_mut();
-    let needs_load = match cache.as_ref() {
-        Some(c) => c.dir_id != dir.id,
-        None => true,
-    };
+    let key = dir_cache_key(dir.id);
 
-    if needs_load {
-        // Only show cached previews (no auto-generation)
-        let preview_path = match get_cached_dir_preview(dir.id) {
-            Some(p) => p,
-            None => {
-                let placeholder = Paragraph::new("Press 'o' → Dir preview to generate");
-                frame.render_widget(placeholder, inner);
-                *cache = None;
+    // Cache hit — render directly from LRU
+    {
+        let mut cache = state.dir_preview_cache.borrow_mut();
+        if let Some(entry) = cache.get_mut(&key) {
+            if let Some(ref mut protocol) = entry.protocol {
+                let image_widget =
+                    StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+                frame.render_stateful_widget(image_widget, inner, protocol);
                 return;
             }
-        };
-
-        // Load the composite image
-        let image = match image::open(&preview_path) {
-            Ok(img) => img,
-            Err(_) => {
-                *cache = None;
-                let error = Paragraph::new("Failed to load preview");
-                frame.render_widget(error, inner);
-                return;
-            }
-        };
-
-        let arc = Arc::new(image);
-        *cache = Some(DirectoryPreviewCache::new(dir.id, Arc::clone(&arc)));
-
-        // Create protocol — directory preview only loads once per directory switch
-        // so this small block on the UI thread is acceptable
-        let mut proto = state.dir_render_protocol.borrow_mut();
-        if let Some(protocol) = create_protocol((*arc).clone()) {
-            *proto = Some((dir.id, protocol));
         }
     }
-    drop(cache);
 
-    // Render using the active directory protocol (reused across frames)
-    let mut proto = state.dir_render_protocol.borrow_mut();
-    if let Some((_, ref mut protocol)) = *proto {
-        let image_widget =
-            StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
-        frame.render_stateful_widget(image_widget, inner, protocol);
+    // Cache miss — load from disk
+    let preview_path = match get_cached_dir_preview(dir.id) {
+        Some(p) => p,
+        None => {
+            let placeholder = Paragraph::new("Press 'o' → Dir preview to generate");
+            frame.render_widget(placeholder, inner);
+            return;
+        }
+    };
+
+    let image = match image::open(&preview_path) {
+        Ok(img) => img,
+        Err(_) => {
+            let error = Paragraph::new("Failed to load preview");
+            frame.render_widget(error, inner);
+            return;
+        }
+    };
+
+    let arc = Arc::new(image);
+    let protocol = create_protocol((*arc).clone());
+
+    let mut cache = state.dir_preview_cache.borrow_mut();
+    cache.insert(key.clone(), arc, protocol);
+
+    // Render the just-inserted entry
+    if let Some(entry) = cache.get_mut(&key) {
+        if let Some(ref mut protocol) = entry.protocol {
+            let image_widget =
+                StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+            frame.render_stateful_widget(image_widget, inner, protocol);
+        }
     }
 }
 
