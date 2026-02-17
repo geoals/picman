@@ -269,94 +269,96 @@ fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     // images at the right size (cheap atomic store, runs every render cycle)
     state.preview_loader.borrow().set_preview_area(inner.width, inner.height);
 
-    // During rapid navigation (skip_preview), don't queue new loads —
-    // just keep showing whatever protocol is active (previous image)
+    // During rapid navigation (skip_preview), render from cache if available
+    // but don't queue new loads — the user is still scrolling.
     if state.skip_preview {
-        render_active_file_protocol(frame, inner, state);
+        let mut cache = state.preview_cache.borrow_mut();
+        if let Some(entry) = cache.get_mut(&file_path) {
+            if let Some(ref mut protocol) = entry.protocol {
+                let image_widget =
+                    StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+                frame.render_stateful_widget(image_widget, inner, protocol);
+                *state.render_protocol.borrow_mut() = Some(file_path);
+                return;
+            }
+        }
+        drop(cache);
+        // Cache miss — show last rendered image, don't queue load
+        render_fallback_protocol(frame, inner, state);
         return;
     }
 
-    // Check if the active render protocol already matches this file
+    // Try to render directly from cache — instant path for preloaded files
     {
-        let proto = state.render_protocol.borrow();
-        if proto.as_ref().is_some_and(|(path, _)| *path == file_path) {
-            drop(proto);
-            // Protocol matches — render it (fast: just outputs placeholders)
-            render_active_file_protocol(frame, inner, state);
-            return;
+        let mut cache = state.preview_cache.borrow_mut();
+        if let Some(entry) = cache.get_mut(&file_path) {
+            if let Some(ref mut protocol) = entry.protocol {
+                let image_widget =
+                    StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+                frame.render_stateful_widget(image_widget, inner, protocol);
+                *state.render_protocol.borrow_mut() = Some(file_path);
+                return;
+            }
         }
     }
 
-    // Protocol doesn't match — we need a new one.
-    // Check if the image is in the decode cache.
-    let cache = state.preview_cache.borrow();
-    let in_cache = cache.contains(&file_path);
-
-    if in_cache {
-        // Image cached but no matching protocol — ask the worker to create one.
-        // Arc::clone is O(1), so this doesn't block the UI.
-        let image = cache.get(&file_path).map(|p| Arc::clone(&p.image));
-        drop(cache);
-
-        if let Some(image) = image {
-            let mut loader = state.preview_loader.borrow_mut();
-            loader.queue_protocol_creation(file_path, image);
+    // Not in cache at all — need to load from disk.
+    // Cache miss — resolve the preview path (disk I/O deferred to here,
+    // only runs when we actually need to queue a new load)
+    let load_args = if thumbnails::is_image_file(&file_path) {
+        match get_preview_path_for_file(&file_path) {
+            Some((path, is_thumb)) => Some((path, is_thumb)),
+            None => Some((file_path.clone(), false)),
         }
     } else {
-        drop(cache);
-
-        // Cache miss — resolve the preview path (disk I/O deferred to here,
-        // only runs when we actually need to queue a new load)
-        let load_args = if thumbnails::is_image_file(&file_path) {
-            match get_preview_path_for_file(&file_path) {
-                Some((path, is_thumb)) => Some((path, is_thumb)),
-                None => Some((file_path.clone(), false)),
+        // Video: try cached thumbnail, auto-generate if missing
+        match get_preview_path_for_file(&file_path)
+            .or_else(|| generate_video_thumbnail(&file_path).map(|thumb| (thumb, true)))
+        {
+            Some((path, is_thumb)) => Some((path, is_thumb)),
+            None => {
+                let info = format!(
+                    "{}\n\nFailed to generate thumbnail",
+                    file_path.file_name().unwrap_or_default().to_string_lossy()
+                );
+                let placeholder = Paragraph::new(info).alignment(Alignment::Center);
+                frame.render_widget(placeholder, inner);
+                return;
             }
-        } else {
-            // Video: try cached thumbnail, auto-generate if missing
-            match get_preview_path_for_file(&file_path)
-                .or_else(|| generate_video_thumbnail(&file_path).map(|thumb| (thumb, true)))
-            {
-                Some((path, is_thumb)) => Some((path, is_thumb)),
-                None => {
-                    let info = format!(
-                        "{}\n\nFailed to generate thumbnail",
-                        file_path.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                    let placeholder = Paragraph::new(info).alignment(Alignment::Center);
-                    frame.render_widget(placeholder, inner);
-                    return;
-                }
-            }
-        };
+        }
+    };
 
-        if let Some((preview_path, is_thumbnail)) = load_args {
-            let mut loader = state.preview_loader.borrow_mut();
-            if !loader.is_pending(&file_path) {
-                if let Some(dir_id) = state.current_dir_id {
-                    loader.queue_load(
-                        file_path.clone(),
-                        preview_path,
-                        is_thumbnail,
-                        dir_id,
-                        true,
-                    );
-                }
+    if let Some((preview_path, is_thumbnail)) = load_args {
+        let mut loader = state.preview_loader.borrow_mut();
+        if !loader.is_pending(&file_path) {
+            if let Some(dir_id) = state.current_dir_id {
+                loader.queue_load(
+                    file_path,
+                    preview_path,
+                    is_thumbnail,
+                    dir_id,
+                );
             }
         }
     }
 
     // While waiting, keep showing the previous image (no flash)
-    render_active_file_protocol(frame, inner, state);
+    render_fallback_protocol(frame, inner, state);
 }
 
-/// Render whatever file protocol is currently active (keeps previous image visible).
-fn render_active_file_protocol(frame: &mut Frame, area: Rect, state: &AppState) {
-    let mut proto = state.render_protocol.borrow_mut();
-    if let Some((_, ref mut protocol)) = *proto {
-        let image_widget =
-            StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
-        frame.render_stateful_widget(image_widget, area, protocol);
+/// Render the last successfully rendered protocol from cache (keeps previous image visible).
+/// Used during rapid navigation or while waiting for a new image to load.
+fn render_fallback_protocol(frame: &mut Frame, area: Rect, state: &AppState) {
+    let render_path = state.render_protocol.borrow().clone();
+    if let Some(ref path) = render_path {
+        let mut cache = state.preview_cache.borrow_mut();
+        if let Some(entry) = cache.get_mut(path) {
+            if let Some(ref mut protocol) = entry.protocol {
+                let image_widget =
+                    StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+                frame.render_stateful_widget(image_widget, area, protocol);
+            }
+        }
     }
 }
 

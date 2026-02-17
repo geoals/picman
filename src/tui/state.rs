@@ -7,8 +7,6 @@ use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, TableState};
 
-use ratatui_image::protocol::StatefulProtocol;
-
 use crate::db::{Database, Directory, File};
 use crate::suggestions::extract_suggested_words;
 use crate::tui::preview_loader::PreviewLoader;
@@ -151,8 +149,12 @@ impl FileListState {
     }
 }
 
-/// Default LRU cache size (10 decoded images, ~50MB memory at 1920×1440)
-const DEFAULT_PREVIEW_CACHE_SIZE: usize = 10;
+/// Default LRU cache size. Each entry holds a decoded `Arc<DynamicImage>` plus
+/// a `Box<dyn StatefulProtocol>` (which clones the image internally). At ~22MB
+/// per entry worst case (1920×1440 RGBA × 2), 50 entries ≈ 1.1GB client RAM
+/// and ≈ 50 images in the terminal's graphics cache. Stays well within Kitty's
+/// default 320MB image cache limit.
+const DEFAULT_PREVIEW_CACHE_SIZE: usize = 50;
 
 /// Main application state
 pub struct AppState {
@@ -195,12 +197,13 @@ pub struct AppState {
     /// Layout rects saved each frame for mouse hit-testing
     pub tree_area: Rect,
     pub file_list_area: Rect,
-    /// Active render protocol for file preview — reused across frames for the same image.
-    /// Only replaced when navigating to a different file whose image is cached.
-    /// This avoids both Kitty image ID saturation and per-frame flickering.
-    pub render_protocol: RefCell<Option<(PathBuf, Box<dyn StatefulProtocol>)>>,
+    /// Path of the file whose protocol is currently being rendered.
+    /// The actual protocol lives in the preview_cache entry. This path is used
+    /// as a fallback reference during rapid navigation (skip_preview) so we know
+    /// which cached protocol to keep showing.
+    pub render_protocol: RefCell<Option<PathBuf>>,
     /// Active render protocol for directory composite preview.
-    pub dir_render_protocol: RefCell<Option<(i64, Box<dyn StatefulProtocol>)>>,
+    pub dir_render_protocol: RefCell<Option<(i64, Box<dyn ratatui_image::protocol::StatefulProtocol>)>>,
 }
 
 impl AppState {
@@ -427,23 +430,15 @@ impl AppState {
     /// Also preloads other files in the current directory.
     pub fn poll_preview_results(&self) {
         let results = self.preview_loader.borrow_mut().poll_results();
-        let selected_path = self.selected_file_path();
 
         for result in results {
+            let mut cache = self.preview_cache.borrow_mut();
             if let Some(image) = result.image {
-                self.preview_cache.borrow_mut().insert(result.path.clone(), image);
-            }
-            // Only update render_protocol if this result is for the currently selected file
-            // AND no matching protocol exists yet. Replacing an active protocol with a new
-            // one for the same file causes a visible flash as the terminal destroys the old
-            // image and re-sends the new one.
-            if let Some(protocol) = result.protocol {
-                if selected_path.as_ref() == Some(&result.path) {
-                    let mut proto = self.render_protocol.borrow_mut();
-                    if !proto.as_ref().is_some_and(|(p, _)| *p == result.path) {
-                        *proto = Some((result.path, protocol));
-                    }
-                }
+                // Insert image and protocol together into the cache
+                cache.insert(result.path.clone(), image, result.protocol);
+            } else if let Some(protocol) = result.protocol {
+                // Protocol only (shouldn't happen with current design, but handle gracefully)
+                cache.set_protocol(&result.path, protocol);
             }
         }
 
@@ -485,10 +480,6 @@ impl AppState {
 
         // If selected file isn't cached, bump generation to invalidate stale
         // preloads from a previous position — the worker skips them instantly.
-        // BUT: if the render protocol already matches, the selected file is still
-        // displaying fine (the decode cache evicted it, but the protocol is the
-        // final product). Don't re-queue or we'll replace the active protocol and
-        // cause a flash.
         let selected_file = &self.file_list.files[selected_idx];
         let selected_path = if dir.path.is_empty() {
             self.library_path.join(&selected_file.file.filename)
@@ -497,24 +488,18 @@ impl AppState {
                 .join(&dir.path)
                 .join(&selected_file.file.filename)
         };
-        let selected_proto_matches = self
-            .render_protocol
-            .borrow()
-            .as_ref()
-            .is_some_and(|(path, _)| *path == selected_path);
 
-        if !cache.contains(&selected_path)
-            && !loader.is_pending(&selected_path)
-            && !selected_proto_matches
-        {
+        if !cache.contains(&selected_path) && !loader.is_pending(&selected_path) {
             loader.bump_load_generation();
         }
 
         // Queue files starting from selected index, wrapping around.
         // Selected file is always first → processed before neighbors.
+        // Limit total (cached + pending) to cache size to avoid an eviction cycle
+        // where preloads evict the selected file's protocol causing flicker.
         let indices = (selected_idx..total).chain(0..selected_idx);
         for idx in indices {
-            if loader.pending_count() >= max_pending {
+            if cache.len() + loader.pending_count() >= max_pending {
                 break;
             }
 
@@ -531,19 +516,12 @@ impl AppState {
                 continue;
             }
 
-            // Skip selected file if its protocol is already active — no need to
-            // re-decode just because the LRU cache evicted the intermediate image.
-            if idx == selected_idx && selected_proto_matches {
-                continue;
-            }
-
             let (preview_path, is_thumbnail) = match get_preview_path_for_file(&file_path) {
                 Some(result) => result,
                 None => continue,
             };
 
-            let is_selected = idx == selected_idx;
-            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id, is_selected);
+            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id);
         }
     }
 
@@ -1266,7 +1244,7 @@ impl AppState {
         self.status_message = Some(format!("Renamed to '{}'", new_name));
         self.rename_dialog = None;
 
-        // Invalidate caches
+        // Invalidate caches (protocols are in preview_cache, cleared with it)
         self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
         *self.render_protocol.borrow_mut() = None;

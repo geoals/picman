@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use crate::thumbnails::{apply_exif_orientation, is_image_file};
 use super::widgets::create_protocol;
@@ -19,19 +18,10 @@ pub struct LoadRequest {
     pub is_thumbnail: bool,
     pub dir_id: i64,
     generation: u64,
-    /// When true, the worker also creates a render protocol after decoding,
-    /// saving a round-trip. Set for the currently selected file only.
-    create_protocol: bool,
 }
 
-/// Request to create a protocol from an already-decoded image
-struct ProtocolRequest {
-    path: PathBuf,
-    image: Arc<DynamicImage>,
-}
-
-/// Result of a background operation — may carry a decoded image, a ready
-/// protocol, or both.
+/// Result of a background load — always carries both an image and a protocol
+/// (or neither, on decode failure).
 pub struct LoadResult {
     pub path: PathBuf,
     pub image: Option<Arc<DynamicImage>>,
@@ -52,10 +42,9 @@ fn unpack_area(packed: u32) -> (u16, u16) {
 /// - Never blocks the UI thread on `image::open()` or `resize_encode()`
 /// - Skips stale loads from previous directories or navigation positions
 /// - Processes requests sequentially in a dedicated thread
-/// - Protocol creation requests have priority over image loads
+/// - Always creates a render protocol after decoding (stored in cache for instant render)
 pub struct PreviewLoader {
     load_tx: Sender<LoadRequest>,
-    proto_tx: Sender<ProtocolRequest>,
     result_rx: Receiver<LoadResult>,
     current_dir_id: Arc<AtomicI64>,
     /// Last-known preview render area, packed as (width << 16 | height).
@@ -78,7 +67,6 @@ impl Default for PreviewLoader {
 impl PreviewLoader {
     pub fn new() -> Self {
         let (load_tx, load_rx) = channel::<LoadRequest>();
-        let (proto_tx, proto_rx) = channel::<ProtocolRequest>();
         let (result_tx, result_rx) = channel::<LoadResult>();
         let current_dir_id = Arc::new(AtomicI64::new(-1));
         let preview_area = Arc::new(AtomicU32::new(0));
@@ -89,12 +77,11 @@ impl PreviewLoader {
 
         // Spawn worker thread
         thread::spawn(move || {
-            worker_loop(load_rx, proto_rx, result_tx, dir_id_clone, area_clone, gen_clone);
+            worker_loop(load_rx, result_tx, dir_id_clone, area_clone, gen_clone);
         });
 
         Self {
             load_tx,
-            proto_tx,
             result_rx,
             current_dir_id,
             preview_area,
@@ -107,12 +94,10 @@ impl PreviewLoader {
     #[cfg(test)]
     fn with_channels(
         load_tx: Sender<LoadRequest>,
-        proto_tx: Sender<ProtocolRequest>,
         result_rx: Receiver<LoadResult>,
     ) -> Self {
         Self {
             load_tx,
-            proto_tx,
             result_rx,
             current_dir_id: Arc::new(AtomicI64::new(-1)),
             preview_area: Arc::new(AtomicU32::new(0)),
@@ -141,15 +126,13 @@ impl PreviewLoader {
         self.pending.clear();
     }
 
-    /// Number of in-flight load/protocol requests.
+    /// Number of in-flight load requests.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
 
     /// Queue an image to be loaded in the background.
-    /// When `create_protocol` is true, the worker also creates a render protocol
-    /// after decoding — use this for the currently selected file to eliminate a
-    /// round-trip. Preloads should pass false to avoid wasted protocol work.
+    /// The worker always creates a render protocol after decoding.
     /// Returns true if queued, false if already pending.
     pub fn queue_load(
         &mut self,
@@ -157,7 +140,6 @@ impl PreviewLoader {
         preview_path: PathBuf,
         is_thumbnail: bool,
         dir_id: i64,
-        create_protocol: bool,
     ) -> bool {
         if self.pending.contains(&path) {
             return false;
@@ -170,35 +152,9 @@ impl PreviewLoader {
             is_thumbnail,
             dir_id,
             generation,
-            create_protocol,
         };
 
         if self.load_tx.send(request).is_ok() {
-            self.pending.insert(path);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Queue protocol creation from an already-decoded image.
-    /// Used when navigating back to a cached image that needs a fresh protocol.
-    /// These requests have priority over image loads.
-    pub fn queue_protocol_creation(
-        &mut self,
-        path: PathBuf,
-        image: Arc<DynamicImage>,
-    ) -> bool {
-        if self.pending.contains(&path) {
-            return false;
-        }
-
-        let request = ProtocolRequest {
-            path: path.clone(),
-            image,
-        };
-
-        if self.proto_tx.send(request).is_ok() {
             self.pending.insert(path);
             true
         } else {
@@ -228,38 +184,17 @@ impl PreviewLoader {
     }
 }
 
-/// Worker thread that processes protocol-creation and load requests.
-/// Protocol requests have priority — they are checked before each load.
+/// Worker thread that processes load requests.
+/// Blocks on recv() — no busy-polling needed since there's only one channel.
 fn worker_loop(
     load_rx: Receiver<LoadRequest>,
-    proto_rx: Receiver<ProtocolRequest>,
     result_tx: Sender<LoadResult>,
     current_dir_id: Arc<AtomicI64>,
     preview_area: Arc<AtomicU32>,
     load_generation: Arc<AtomicU64>,
 ) {
-    loop {
-        // Priority: drain all pending protocol requests first
-        loop {
-            match proto_rx.try_recv() {
-                Ok(req) => {
-                    handle_create_protocol(req, &result_tx, &preview_area);
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
-            }
-        }
-
-        // Then wait for a load request (with short timeout so we re-check proto_rx promptly)
-        match load_rx.recv_timeout(Duration::from_millis(10)) {
-            Ok(req) => {
-                handle_load(req, &result_tx, &current_dir_id, &load_generation, &preview_area);
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // No loads pending, loop back to check proto_rx
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-        }
+    while let Ok(req) = load_rx.recv() {
+        handle_load(req, &result_tx, &current_dir_id, &load_generation, &preview_area);
     }
 }
 
@@ -283,8 +218,7 @@ fn downscale_for_cache(image: DynamicImage) -> DynamicImage {
     }
 }
 
-/// Handle a load-from-disk request: decode image and optionally create a
-/// render protocol in the same pass (when `create_protocol` is set).
+/// Handle a load-from-disk request: decode image and create a render protocol.
 /// Stale requests (wrong directory or generation) are silently dropped.
 fn handle_load(
     request: LoadRequest,
@@ -314,34 +248,14 @@ fn handle_load(
 
     let arc_image = image.map(|img| Arc::new(downscale_for_cache(img)));
 
-    // For the selected file, also create the protocol to save a round-trip.
-    // Preloads skip this to avoid wasted work on images that may never be viewed.
-    let protocol = if request.create_protocol {
-        arc_image
-            .as_ref()
-            .and_then(|img| make_pre_encoded_protocol(img, preview_area))
-    } else {
-        None
-    };
+    // Always create a protocol so the cache entry is render-ready
+    let protocol = arc_image
+        .as_ref()
+        .and_then(|img| make_pre_encoded_protocol(img, preview_area));
 
     let _ = result_tx.send(LoadResult {
         path: request.path,
         image: arc_image,
-        protocol,
-    });
-}
-
-/// Handle a protocol-creation request for an already-cached image
-fn handle_create_protocol(
-    request: ProtocolRequest,
-    result_tx: &Sender<LoadResult>,
-    preview_area: &Arc<AtomicU32>,
-) {
-    let protocol = make_pre_encoded_protocol(&request.image, preview_area);
-
-    let _ = result_tx.send(LoadResult {
-        path: request.path,
-        image: None, // already cached, no need to re-insert
         protocol,
     });
 }
@@ -386,23 +300,21 @@ mod tests {
     use std::sync::mpsc::channel;
 
     /// Create a test loader with injected channels, returning the loader
-    /// plus the request receivers and result sender for driving tests.
+    /// plus the request receiver and result sender for driving tests.
     fn test_loader() -> (
         PreviewLoader,
         Receiver<LoadRequest>,
-        Receiver<ProtocolRequest>,
         Sender<LoadResult>,
     ) {
         let (load_tx, load_rx) = channel::<LoadRequest>();
-        let (proto_tx, proto_rx) = channel::<ProtocolRequest>();
         let (result_tx, result_rx) = channel::<LoadResult>();
-        let loader = PreviewLoader::with_channels(load_tx, proto_tx, result_rx);
-        (loader, load_rx, proto_rx, result_tx)
+        let loader = PreviewLoader::with_channels(load_tx, result_rx);
+        (loader, load_rx, result_tx)
     }
 
     #[test]
     fn test_queue_load_tracks_pending() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
+        let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
         let queued = loader.queue_load(
@@ -410,7 +322,6 @@ mod tests {
             path.clone(),
             false,
             1,
-            false,
         );
 
         assert!(queued);
@@ -419,19 +330,19 @@ mod tests {
 
     #[test]
     fn test_queue_load_deduplicates() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
+        let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1, false));
-        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1, false));
+        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1));
     }
 
     #[test]
     fn test_set_current_dir_clears_pending() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
+        let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1, false);
+        loader.queue_load(path.clone(), path.clone(), false, 1);
         assert!(loader.is_pending(&path));
 
         loader.set_current_dir(2);
@@ -440,10 +351,10 @@ mod tests {
 
     #[test]
     fn test_poll_results_clears_pending() {
-        let (mut loader, _load_rx, _proto_rx, result_tx) = test_loader();
+        let (mut loader, _load_rx, result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1, false);
+        loader.queue_load(path.clone(), path.clone(), false, 1);
         assert!(loader.is_pending(&path));
 
         // Simulate the worker sending back a result
@@ -461,28 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_protocol_creation_tracks_pending() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
-
-        let path = PathBuf::from("/photos/img001.jpg");
-        let image = Arc::new(DynamicImage::new_rgb8(1, 1));
-        let queued = loader.queue_protocol_creation(path.clone(), image);
-
-        assert!(queued);
-        assert!(loader.is_pending(&path));
-    }
-
-    #[test]
-    fn test_queue_protocol_creation_deduplicates() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
-
-        let path = PathBuf::from("/photos/img001.jpg");
-        let image = Arc::new(DynamicImage::new_rgb8(1, 1));
-        assert!(loader.queue_protocol_creation(path.clone(), Arc::clone(&image)));
-        assert!(!loader.queue_protocol_creation(path.clone(), image));
-    }
-
-    #[test]
     fn test_pack_unpack_area_round_trip() {
         assert_eq!(unpack_area(pack_area(120, 40)), (120, 40));
         assert_eq!(unpack_area(pack_area(0, 0)), (0, 0));
@@ -491,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_set_preview_area() {
-        let (loader, _load_rx, _proto_rx, _result_tx) = test_loader();
+        let (loader, _load_rx, _result_tx) = test_loader();
 
         // Initially zero (unknown)
         assert_eq!(loader.preview_area.load(Ordering::Relaxed), 0);
@@ -502,35 +391,16 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_load_sends_to_load_channel() {
-        let (mut loader, load_rx, proto_rx, _result_tx) = test_loader();
+    fn test_queue_load_sends_to_channel() {
+        let (mut loader, load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1, false);
+        loader.queue_load(path.clone(), path.clone(), false, 1);
 
         // Should appear on load channel with current generation
         let req = load_rx.try_recv().unwrap();
         assert_eq!(req.path, path);
         assert_eq!(req.generation, 0);
-
-        // Should NOT appear on protocol channel
-        assert!(proto_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn test_queue_protocol_sends_to_proto_channel() {
-        let (mut loader, load_rx, proto_rx, _result_tx) = test_loader();
-
-        let path = PathBuf::from("/photos/img001.jpg");
-        let image = Arc::new(DynamicImage::new_rgb8(1, 1));
-        loader.queue_protocol_creation(path.clone(), image);
-
-        // Should appear on protocol channel
-        let req = proto_rx.try_recv().unwrap();
-        assert_eq!(req.path, path);
-
-        // Should NOT appear on load channel
-        assert!(load_rx.try_recv().is_err());
     }
 
     #[test]
@@ -554,10 +424,10 @@ mod tests {
 
     #[test]
     fn test_bump_load_generation_clears_pending_and_increments() {
-        let (mut loader, _load_rx, _proto_rx, _result_tx) = test_loader();
+        let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1, false);
+        loader.queue_load(path.clone(), path.clone(), false, 1);
         assert!(loader.is_pending(&path));
         assert_eq!(loader.pending_count(), 1);
 
@@ -569,16 +439,16 @@ mod tests {
 
     #[test]
     fn test_bump_generation_allows_requeue() {
-        let (mut loader, load_rx, _proto_rx, _result_tx) = test_loader();
+        let (mut loader, load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1, false));
+        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
         // Duplicate blocked
-        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1, false));
+        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1));
 
         // Bump clears pending — same file can be re-queued with new generation
         loader.bump_load_generation();
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1, false));
+        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
 
         // First request has generation 0, second has generation 1
         let req1 = load_rx.try_recv().unwrap();

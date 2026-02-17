@@ -131,17 +131,17 @@ fn run_app(
 
         terminal.draw(|frame| render(frame, state))?;
 
+        // Clear skip_preview AFTER rendering so it takes effect this frame.
+        // Event handling below may set it again for the next frame.
+        state.clear_skip_preview();
+
         // Use shorter timeout when we're waiting for async work:
         // - Background operations (thumbnails, hashing): 100ms for progress updates
         // - Pending preview: 50ms so the worker result is picked up promptly
         // - Idle: 1 second to save CPU
         let preview_ready = match state.focus {
             Focus::FileList => match state.selected_file_path() {
-                Some(sel) => state
-                    .render_protocol
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|(path, _)| *path == sel),
+                Some(sel) => state.preview_cache.borrow().has_protocol(&sel),
                 None => true,
             },
             _ => true,
@@ -191,7 +191,6 @@ fn run_app(
 
         // After draining all keypresses, process deferred updates
         state.load_files_if_dirty()?;
-        state.clear_skip_preview();
     }
 }
 
