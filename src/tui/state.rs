@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -333,11 +333,11 @@ impl LruPreviewCache {
     }
 
     /// Get a cached preview, updating access order
-    pub fn get_mut(&mut self, path: &PathBuf) -> Option<&mut PreviewCache> {
+    pub fn get_mut(&mut self, path: &Path) -> Option<&mut PreviewCache> {
         if self.entries.contains_key(path) {
             // Update access order: move to back (most recent)
-            self.access_order.retain(|p| p != path);
-            self.access_order.push_back(path.clone());
+            self.access_order.retain(|p| p.as_path() != path);
+            self.access_order.push_back(path.to_path_buf());
             self.entries.get_mut(path)
         } else {
             None
@@ -345,7 +345,7 @@ impl LruPreviewCache {
     }
 
     /// Check if cache contains a path
-    pub fn contains(&self, path: &PathBuf) -> bool {
+    pub fn contains(&self, path: &Path) -> bool {
         self.entries.contains_key(path)
     }
 
@@ -698,9 +698,6 @@ impl AppState {
         self.file_list.selected_index = 0;
         self.file_list.table_state.select(Some(0));
 
-        // Clear preview cache on directory change to avoid showing wrong directory's previews
-        self.preview_cache.borrow_mut().clear();
-
         let selected_dir = self.get_selected_directory().cloned();
         if let Some(dir) = selected_dir {
             // Update current directory ID and notify preview loader
@@ -859,22 +856,19 @@ impl AppState {
         use crate::tui::widgets::create_protocol;
 
         let results = self.preview_loader.borrow_mut().poll_results();
-        let mut loaded_count = 0;
 
         for result in results {
             if let Some(image) = result.image {
                 // Create protocol on main thread (picker is not thread-safe)
                 if let Some(protocol) = create_protocol(image) {
                     self.preview_cache.borrow_mut().insert(result.path, protocol);
-                    loaded_count += 1;
                 }
             }
         }
 
-        // After successfully loading images, preload other files in the directory
-        if loaded_count > 0 {
-            self.preload_directory_files();
-        }
+        // Preload other files in the directory (runs on every poll, not just after loads,
+        // so that entering a new directory triggers preloading immediately)
+        self.preload_directory_files();
     }
 
     /// Preload all image/video files in the current directory that aren't already cached or pending.
@@ -2093,23 +2087,96 @@ mod tests {
 
     // ==================== LruPreviewCache Tests ====================
 
-    // Note: We can't fully test LruPreviewCache with actual protocols in unit tests
-    // because StatefulProtocol requires terminal capabilities. Testing basic operations.
+    /// Minimal mock implementing StatefulProtocol for unit tests.
+    /// Stores no real image data — just satisfies the trait bounds.
+    #[derive(Clone)]
+    struct MockProtocol;
+
+    impl StatefulProtocol for MockProtocol {
+        fn needs_resize(
+            &mut self,
+            _resize: &ratatui_image::Resize,
+            _area: ratatui::layout::Rect,
+        ) -> Option<ratatui::layout::Rect> {
+            None
+        }
+
+        fn resize_encode(
+            &mut self,
+            _resize: &ratatui_image::Resize,
+            _background_color: Option<image::Rgb<u8>>,
+            _area: ratatui::layout::Rect,
+        ) {
+        }
+
+        fn render(&mut self, _area: ratatui::layout::Rect, _buf: &mut ratatui::buffer::Buffer) {}
+    }
+
+    fn mock_protocol() -> Box<dyn StatefulProtocol> {
+        Box::new(MockProtocol)
+    }
 
     #[test]
     fn test_lru_preview_cache_basic() {
-        // Test that the cache structure works (without actual protocols)
         let cache = LruPreviewCache::new(3);
         assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
         assert!(!cache.contains(&PathBuf::from("test.jpg")));
     }
 
     #[test]
-    fn test_lru_preview_cache_clear() {
+    fn test_lru_eviction() {
         let mut cache = LruPreviewCache::new(3);
-        // Clear should work on empty cache
-        cache.clear();
-        assert_eq!(cache.len(), 0);
+
+        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("c.jpg"), mock_protocol());
+        assert_eq!(cache.len(), 3);
+
+        // Inserting a 4th should evict the oldest ("a.jpg")
+        cache.insert(PathBuf::from("d.jpg"), mock_protocol());
+        assert_eq!(cache.len(), 3);
+        assert!(!cache.contains(&PathBuf::from("a.jpg")));
+        assert!(cache.contains(&PathBuf::from("b.jpg")));
+        assert!(cache.contains(&PathBuf::from("c.jpg")));
+        assert!(cache.contains(&PathBuf::from("d.jpg")));
+    }
+
+    #[test]
+    fn test_lru_access_order() {
+        let mut cache = LruPreviewCache::new(3);
+
+        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("c.jpg"), mock_protocol());
+
+        // Access "a.jpg" — makes it most-recently-used
+        cache.get_mut(Path::new("a.jpg"));
+
+        // Insert a 4th — should evict "b.jpg" (the least recently used)
+        cache.insert(PathBuf::from("d.jpg"), mock_protocol());
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains(&PathBuf::from("a.jpg")));
+        assert!(!cache.contains(&PathBuf::from("b.jpg")));
+        assert!(cache.contains(&PathBuf::from("c.jpg")));
+        assert!(cache.contains(&PathBuf::from("d.jpg")));
+    }
+
+    #[test]
+    fn test_get_last_accessed() {
+        let mut cache = LruPreviewCache::new(3);
+
+        cache.insert(PathBuf::from("a.jpg"), mock_protocol());
+        cache.insert(PathBuf::from("b.jpg"), mock_protocol());
+
+        // Last inserted is "b.jpg"
+        let last = cache.get_last_accessed_mut().unwrap();
+        assert_eq!(last.path, PathBuf::from("b.jpg"));
+
+        // Access "a.jpg" — now it becomes the last accessed
+        cache.get_mut(Path::new("a.jpg"));
+        let last = cache.get_last_accessed_mut().unwrap();
+        assert_eq!(last.path, PathBuf::from("a.jpg"));
     }
 
     // ==================== FilterDialogState Tests ====================

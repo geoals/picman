@@ -1,5 +1,5 @@
 use image::DynamicImage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
@@ -61,6 +61,20 @@ impl PreviewLoader {
         }
     }
 
+    /// Create a PreviewLoader with injected channels (for testing without a worker thread).
+    #[cfg(test)]
+    fn with_channels(
+        request_tx: Sender<LoadRequest>,
+        result_rx: Receiver<LoadResult>,
+    ) -> Self {
+        Self {
+            request_tx,
+            result_rx,
+            current_dir_id: Arc::new(AtomicI64::new(-1)),
+            pending: std::collections::HashSet::new(),
+        }
+    }
+
     /// Set the current directory ID. Loads from other directories will be skipped.
     pub fn set_current_dir(&mut self, dir_id: i64) {
         self.current_dir_id.store(dir_id, Ordering::Relaxed);
@@ -97,7 +111,7 @@ impl PreviewLoader {
     }
 
     /// Check if a path is currently being loaded
-    pub fn is_pending(&self, path: &PathBuf) -> bool {
+    pub fn is_pending(&self, path: &Path) -> bool {
         self.pending.contains(path)
     }
 
@@ -157,7 +171,7 @@ fn worker_loop(
 }
 
 /// Load an image, applying EXIF orientation if needed
-fn load_image(preview_path: &PathBuf, is_thumbnail: bool) -> Option<DynamicImage> {
+fn load_image(preview_path: &Path, is_thumbnail: bool) -> Option<DynamicImage> {
     let img = image::open(preview_path).ok()?;
 
     // Apply EXIF orientation only for original files (thumbnails have it baked in)
@@ -166,4 +180,81 @@ fn load_image(preview_path: &PathBuf, is_thumbnail: bool) -> Option<DynamicImage
     } else {
         apply_exif_orientation(preview_path, img)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    /// Create a test loader with injected channels, returning the loader
+    /// plus the request receiver and result sender for driving tests.
+    fn test_loader() -> (
+        PreviewLoader,
+        Receiver<LoadRequest>,
+        Sender<LoadResult>,
+    ) {
+        let (request_tx, request_rx) = channel::<LoadRequest>();
+        let (result_tx, result_rx) = channel::<LoadResult>();
+        let loader = PreviewLoader::with_channels(request_tx, result_rx);
+        (loader, request_rx, result_tx)
+    }
+
+    #[test]
+    fn test_queue_load_tracks_pending() {
+        let (mut loader, _request_rx, _result_tx) = test_loader();
+
+        let path = PathBuf::from("/photos/img001.jpg");
+        let queued = loader.queue_load(
+            path.clone(),
+            path.clone(),
+            false,
+            1,
+        );
+
+        assert!(queued);
+        assert!(loader.is_pending(&path));
+    }
+
+    #[test]
+    fn test_queue_load_deduplicates() {
+        let (mut loader, _request_rx, _result_tx) = test_loader();
+
+        let path = PathBuf::from("/photos/img001.jpg");
+        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1));
+    }
+
+    #[test]
+    fn test_set_current_dir_clears_pending() {
+        let (mut loader, _request_rx, _result_tx) = test_loader();
+
+        let path = PathBuf::from("/photos/img001.jpg");
+        loader.queue_load(path.clone(), path.clone(), false, 1);
+        assert!(loader.is_pending(&path));
+
+        loader.set_current_dir(2);
+        assert!(!loader.is_pending(&path));
+    }
+
+    #[test]
+    fn test_poll_results_clears_pending() {
+        let (mut loader, _request_rx, result_tx) = test_loader();
+
+        let path = PathBuf::from("/photos/img001.jpg");
+        loader.queue_load(path.clone(), path.clone(), false, 1);
+        assert!(loader.is_pending(&path));
+
+        // Simulate the worker sending back a result
+        result_tx
+            .send(LoadResult {
+                path: path.clone(),
+                image: None,
+            })
+            .unwrap();
+
+        let results = loader.poll_results();
+        assert_eq!(results.len(), 1);
+        assert!(!loader.is_pending(&path));
+    }
 }
