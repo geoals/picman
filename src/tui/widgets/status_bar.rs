@@ -179,7 +179,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // Calculate remaining width for hints
     let left_content: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    let hints = "j/k:move  m:filter  t:tag  ?:help  q:quit";
+    let hints = "j/k:move  m:filter  t:tag  o:operations  ?:help  q:quit";
 
     // Pad with spaces to right-align hints
     let padding_needed = area

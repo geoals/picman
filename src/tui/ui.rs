@@ -62,6 +62,27 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     render_preview(frame, preview_area, state);
     render_status_bar(frame, status_area, state);
 
+    // Dim background when any modal is active
+    let has_modal = state.show_help
+        || state.tag_input.is_some()
+        || state.filter_dialog.is_some()
+        || state.rename_dialog.is_some()
+        || state.operations_menu.is_some();
+
+    if has_modal {
+        let buf = frame.buffer_mut();
+        for y in size.top()..size.bottom() {
+            for x in size.left()..size.right() {
+                let cell = &mut buf[(x, y)];
+                cell.set_style(
+                    cell.style()
+                        .fg(Color::DarkGray)
+                        .bg(Color::Reset),
+                );
+            }
+        }
+    }
+
     // Render help overlay if shown
     if state.show_help {
         render_help_overlay(frame, size);
