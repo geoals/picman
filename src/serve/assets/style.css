@@ -196,7 +196,43 @@ body {
     white-space: nowrap;
 }
 
-/* ==================== Photo Grid ==================== */
+.zoom-controls {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.zoom-controls button {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.zoom-controls button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.zoom-controls button:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.zoom-controls button:disabled:hover {
+    border-color: var(--border);
+    color: var(--text);
+}
+
+/* ==================== Photo Grid (Masonry) ==================== */
 
 #grid {
     flex: 1;
@@ -205,24 +241,30 @@ body {
 }
 
 .photo-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    display: flex;
+    gap: 4px;
+}
+
+.photo-column {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
     gap: 4px;
 }
 
 .photo-cell {
     position: relative;
-    aspect-ratio: 1;
     overflow: hidden;
     cursor: pointer;
     background: var(--bg-surface);
     border-radius: 2px;
+    line-height: 0; /* Remove gap below inline img */
 }
 
 .photo-cell img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto;
     display: block;
     transition: transform 0.15s ease;
 }
@@ -243,6 +285,7 @@ body {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
+    line-height: normal;
 }
 
 .photo-cell:hover .overlay {

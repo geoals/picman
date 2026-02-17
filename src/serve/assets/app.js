@@ -11,10 +11,13 @@ const state = {
     currentPage: 1,
     perPage: 100,
     loading: false,
+    loadGeneration: 0,     // Incremented on each new load; stale responses are discarded
     ratingFilter: "",
     tagFilter: "",
     lightboxIndex: -1,     // -1 = closed
     useFilteredEndpoint: false, // Whether to use /api/files instead of /api/directories/:id/files
+    zoomLevels: [1, 2, 3, 4, 5, 6, 8], // Column counts from most zoomed-in to most zoomed-out
+    zoomIndex: 3,          // Default: 4 columns
 };
 
 // ==================== API ====================
@@ -38,7 +41,8 @@ async function loadTags() {
 }
 
 async function loadFiles(page = 1) {
-    if (state.loading) return;
+    // Bump generation so any in-flight request for a previous directory is discarded
+    const generation = ++state.loadGeneration;
     state.loading = true;
 
     try {
@@ -56,9 +60,11 @@ async function loadFiles(page = 1) {
             params.set("per_page", state.perPage);
             data = await fetchJson(`/api/directories/${state.selectedDirId}/files?${params}`);
         } else {
-            state.loading = false;
             return;
         }
+
+        // Discard response if user navigated away while we were fetching
+        if (generation !== state.loadGeneration) return;
 
         if (page === 1) {
             state.currentFiles = data.files;
@@ -71,7 +77,9 @@ async function loadFiles(page = 1) {
         renderGrid(page === 1);
         renderFileCount();
     } finally {
-        state.loading = false;
+        if (generation === state.loadGeneration) {
+            state.loading = false;
+        }
     }
 }
 
@@ -175,6 +183,9 @@ function selectDirectory(dirId) {
 
     renderDirectoryTree();
     renderBreadcrumb();
+    renderFileCount();
+    // Clear grid immediately so stale content doesn't linger
+    document.getElementById("grid").innerHTML = '<div class="loading">Loading</div>';
     loadFiles(1);
 }
 
@@ -242,10 +253,7 @@ function renderBreadcrumb() {
 
 function renderGrid(replace = true) {
     const container = document.getElementById("grid");
-
-    if (replace) {
-        container.innerHTML = "";
-    }
+    const columnCount = state.zoomLevels[state.zoomIndex];
 
     if (state.currentFiles.length === 0 && !state.loading) {
         container.innerHTML = '<div class="empty-state">No photos in this directory</div>';
@@ -253,20 +261,34 @@ function renderGrid(replace = true) {
     }
 
     let grid = container.querySelector(".photo-grid");
-    if (!grid || replace) {
+
+    // Count existing items for incremental append
+    let existingCount = 0;
+    if (grid && !replace) {
+        for (const col of grid.children) {
+            existingCount += col.children.length;
+        }
+    }
+
+    // Full re-render if replacing or column count changed
+    if (!grid || replace || grid.children.length !== columnCount) {
+        existingCount = 0;
         grid = document.createElement("div");
         grid.className = "photo-grid";
         container.innerHTML = "";
         container.appendChild(grid);
+
+        for (let c = 0; c < columnCount; c++) {
+            const col = document.createElement("div");
+            col.className = "photo-column";
+            grid.appendChild(col);
+        }
     }
 
-    // Only render new items (for infinite scroll)
-    const startIdx = replace ? 0 : grid.children.length;
-
-    for (let i = startIdx; i < state.currentFiles.length; i++) {
-        const file = state.currentFiles[i];
-        const cell = createPhotoCell(file, i);
-        grid.appendChild(cell);
+    // Distribute items round-robin across columns
+    for (let i = existingCount; i < state.currentFiles.length; i++) {
+        const col = grid.children[i % columnCount];
+        col.appendChild(createPhotoCell(state.currentFiles[i], i));
     }
 }
 
@@ -282,12 +304,16 @@ function createPhotoCell(file, index) {
     img.onerror = () => {
         img.style.display = "none";
         cell.style.background = "#2a2a2a";
+        cell.style.height = "120px";
         cell.style.display = "flex";
         cell.style.alignItems = "center";
         cell.style.justifyContent = "center";
+        cell.style.lineHeight = "normal";
         const text = document.createElement("span");
         text.style.color = "#555";
         text.style.fontSize = "0.7rem";
+        text.style.padding = "8px";
+        text.style.wordBreak = "break-all";
         text.textContent = file.filename;
         cell.appendChild(text);
     };
@@ -482,7 +508,12 @@ function setupLightbox() {
 
     // Keyboard navigation
     document.addEventListener("keydown", (e) => {
-        if (state.lightboxIndex < 0) return;
+        // Zoom shortcuts when lightbox is closed
+        if (state.lightboxIndex < 0) {
+            if (e.key === "+" || e.key === "=") { zoomOut(); return; }
+            if (e.key === "-") { zoomIn(); return; }
+            return;
+        }
 
         switch (e.key) {
             case "Escape":
@@ -498,6 +529,54 @@ function setupLightbox() {
     });
 }
 
+// ==================== Zoom ====================
+
+function initZoom() {
+    const saved = localStorage.getItem("picman-zoom-index");
+    if (saved !== null) {
+        const idx = parseInt(saved, 10);
+        if (idx >= 0 && idx < state.zoomLevels.length) {
+            state.zoomIndex = idx;
+        }
+    }
+
+    document.getElementById("zoom-in").addEventListener("click", zoomIn);
+    document.getElementById("zoom-out").addEventListener("click", zoomOut);
+
+    // Ctrl+scroll to zoom (also handles trackpad pinch)
+    document.getElementById("grid").addEventListener("wheel", (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        if (e.deltaY > 0) zoomOut();
+        else if (e.deltaY < 0) zoomIn();
+    }, { passive: false });
+}
+
+function applyZoom() {
+    // Re-render grid with new column count
+    if (document.querySelector(".photo-grid")) {
+        renderGrid(true);
+    }
+
+    // Update button disabled state
+    document.getElementById("zoom-in").disabled = state.zoomIndex <= 0;
+    document.getElementById("zoom-out").disabled = state.zoomIndex >= state.zoomLevels.length - 1;
+}
+
+function zoomIn() {
+    if (state.zoomIndex <= 0) return;
+    state.zoomIndex--;
+    localStorage.setItem("picman-zoom-index", state.zoomIndex);
+    applyZoom();
+}
+
+function zoomOut() {
+    if (state.zoomIndex >= state.zoomLevels.length - 1) return;
+    state.zoomIndex++;
+    localStorage.setItem("picman-zoom-index", state.zoomIndex);
+    applyZoom();
+}
+
 // ==================== Init ====================
 
 async function init() {
@@ -510,6 +589,7 @@ async function init() {
         setupFilterListeners();
         setupInfiniteScroll();
         setupLightbox();
+        initZoom();
 
         // Auto-select first root if there's only one
         const roots = getRootDirectories();
