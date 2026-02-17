@@ -70,6 +70,7 @@ pub async fn get_directories(
 pub struct PaginationParams {
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    pub recursive: Option<bool>,
 }
 
 pub async fn get_directory_files(
@@ -79,36 +80,90 @@ pub async fn get_directory_files(
 ) -> Result<Json<PaginatedFiles>, AppError> {
     let db = state.db.clone();
     let result = spawn_db(db, move |db| {
-        let files = db.get_files_in_directory(dir_id)?;
-        let file_tags = db.get_file_tags_for_directory(dir_id)?;
+        let conn = db.connection();
 
-        // Get directory path for the response
-        let dir_path = db
-            .get_directory(dir_id)
-            .ok()
-            .flatten()
-            .map(|d| d.path)
-            .unwrap_or_default();
-
-        let total = files.len();
         let page = params.page.unwrap_or(1).max(1);
         let per_page = params.per_page.unwrap_or(100).min(500);
-        let skip = (page - 1) * per_page;
+        let offset = (page - 1) * per_page;
+        let recursive = params.recursive.unwrap_or(true);
 
-        let files: Vec<FileResponse> = files
+        let total: usize = if recursive {
+            conn.query_row(
+                "WITH RECURSIVE descendants(id) AS (
+                     SELECT id FROM directories WHERE id = ?1
+                     UNION ALL
+                     SELECT d.id FROM directories d
+                     JOIN descendants dd ON d.parent_id = dd.id
+                 )
+                 SELECT COUNT(*) FROM files f
+                 WHERE f.directory_id IN (SELECT id FROM descendants)",
+                [dir_id],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE directory_id = ?1",
+                [dir_id],
+                |row| row.get(0),
+            )?
+        };
+
+        let mut stmt = if recursive {
+            conn.prepare(
+                "WITH RECURSIVE descendants(id) AS (
+                     SELECT id FROM directories WHERE id = ?1
+                     UNION ALL
+                     SELECT d.id FROM directories d
+                     JOIN descendants dd ON d.parent_id = dd.id
+                 )
+                 SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type
+                 FROM files f
+                 JOIN directories d ON f.directory_id = d.id
+                 WHERE f.directory_id IN (SELECT id FROM descendants)
+                 ORDER BY d.path, f.filename
+                 LIMIT ?2 OFFSET ?3",
+            )?
+        } else {
+            conn.prepare(
+                "SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type
+                 FROM files f
+                 JOIN directories d ON f.directory_id = d.id
+                 WHERE f.directory_id = ?1
+                 ORDER BY f.filename
+                 LIMIT ?2 OFFSET ?3",
+            )?
+        };
+
+        let file_rows: Vec<(i64, String, i64, String, i64, Option<i32>, Option<String>)> = stmt
+            .query_map(rusqlite::params![dir_id, per_page as i64, offset as i64], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Batch-fetch tags for these files
+        let file_ids: Vec<i64> = file_rows.iter().map(|f| f.0).collect();
+        let all_file_tags = batch_get_file_tags(conn, &file_ids)?;
+
+        let files: Vec<FileResponse> = file_rows
             .into_iter()
-            .skip(skip)
-            .take(per_page)
-            .map(|f| {
-                let tags = file_tags.get(&f.id).cloned().unwrap_or_default();
+            .map(|(id, filename, directory_id, dir_path, size, rating, media_type)| {
+                let tags = all_file_tags.get(&id).cloned().unwrap_or_default();
                 FileResponse {
-                    id: f.id,
-                    filename: f.filename,
-                    directory_id: f.directory_id,
-                    directory_path: dir_path.clone(),
-                    size: f.size,
-                    rating: f.rating,
-                    media_type: f.media_type,
+                    id,
+                    filename,
+                    directory_id,
+                    directory_path: dir_path,
+                    size,
+                    rating,
+                    media_type,
                     tags,
                 }
             })
@@ -330,7 +385,7 @@ pub async fn serve_web_thumbnail(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let thumb_path = thumbnails::get_web_thumbnail_path(&file_path);
+    let thumb_path = thumbnails::get_preview_path_for_file(&file_path).map(|(path, _)| path);
     serve_cached_image(thumb_path).await
 }
 

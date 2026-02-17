@@ -9,12 +9,13 @@ const state = {
     currentFiles: [],      // Files currently displayed
     totalFiles: 0,
     currentPage: 1,
-    perPage: 100,
+    perPage: 500,
     loading: false,
     loadGeneration: 0,     // Incremented on each new load; stale responses are discarded
     ratingFilter: "",
     tagFilter: "",
     lightboxIndex: -1,     // -1 = closed
+    recursive: true,           // Whether directory listing includes subdirectories
     useFilteredEndpoint: false, // Whether to use /api/files instead of /api/directories/:id/files
     zoomLevels: [1, 2, 3, 4, 5, 6, 8], // Column counts from most zoomed-in to most zoomed-out
     zoomIndex: 3,          // Default: 4 columns
@@ -58,6 +59,7 @@ async function loadFiles(page = 1) {
             const params = new URLSearchParams();
             params.set("page", page);
             params.set("per_page", state.perPage);
+            if (!state.recursive) params.set("recursive", "false");
             data = await fetchJson(`/api/directories/${state.selectedDirId}/files?${params}`);
         } else {
             return;
@@ -170,8 +172,9 @@ function dirDisplayName(dir) {
     return parts[parts.length - 1];
 }
 
-function selectDirectory(dirId) {
+function selectDirectory(dirId, { recursive = true } = {}) {
     state.selectedDirId = dirId;
+    state.recursive = recursive;
     state.useFilteredEndpoint = false;
     state.currentPage = 1;
     state.currentFiles = [];
@@ -488,6 +491,13 @@ function lightboxNext() {
     }
 }
 
+function goToPhotoSet() {
+    const file = state.currentFiles[state.lightboxIndex];
+    if (!file) return;
+    closeLightbox();
+    selectDirectory(file.directory_id, { recursive: false });
+}
+
 function setupLightbox() {
     const lb = document.getElementById("lightbox");
 
@@ -499,6 +509,10 @@ function setupLightbox() {
     lb.querySelector(".nav-next").addEventListener("click", (e) => {
         e.stopPropagation();
         lightboxNext();
+    });
+    document.getElementById("go-to-set").addEventListener("click", (e) => {
+        e.stopPropagation();
+        goToPhotoSet();
     });
 
     // Click on backdrop closes
