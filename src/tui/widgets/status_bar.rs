@@ -1,6 +1,6 @@
 use ratatui::{layout::Rect, prelude::*, widgets::Paragraph};
 
-use crate::tui::colors::{FOCUS_COLOR, HELP_TEXT, RATING_COLOR, SUCCESS_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
+use crate::tui::colors::{FOCUS_COLOR, RATING_COLOR, STATUS_BAR_BG, STATUS_BAR_FG, SUCCESS_COLOR, TAG_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
 use crate::tui::state::{AppState, Focus, RatingFilter};
 
 /// Spinner frames for indeterminate progress
@@ -48,16 +48,16 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         };
         let empty = bar_width - filled;
 
-        spans.push(Span::styled("[", Style::default().fg(UNFOCUS_COLOR)));
+        spans.push(Span::styled("[", Style::default().fg(Color::Gray)));
         spans.push(Span::styled(
             "█".repeat(filled),
             Style::default().fg(FOCUS_COLOR),
         ));
         spans.push(Span::styled(
             "░".repeat(empty),
-            Style::default().fg(UNFOCUS_COLOR),
+            Style::default().fg(Color::Gray),
         ));
-        spans.push(Span::styled("] ", Style::default().fg(UNFOCUS_COLOR)));
+        spans.push(Span::styled("] ", Style::default().fg(Color::Gray)));
 
         // Count and percentage
         let pct = if total > 0 { completed * 100 / total } else { 0 };
@@ -93,11 +93,11 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         // Cancel hint
         spans.push(Span::styled(
             " [q]",
-            Style::default().fg(HELP_TEXT),
+            Style::default().fg(Color::Gray),
         ));
 
         let line = Line::from(spans);
-        let status = Paragraph::new(line).style(Style::default().bg(WARNING_COLOR).fg(Color::Black));
+        let status = Paragraph::new(line).style(Style::default().bg(STATUS_BAR_BG).fg(STATUS_BAR_FG));
         frame.render_widget(status, area);
         return;
     }
@@ -105,7 +105,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     // Show status message if present
     if let Some(ref msg) = state.status_message {
         let status = Paragraph::new(msg.as_str())
-            .style(Style::default().bg(SUCCESS_COLOR).fg(Color::Black));
+            .style(Style::default().bg(STATUS_BAR_BG).fg(SUCCESS_COLOR));
         frame.render_widget(status, area);
         return;
     }
@@ -193,7 +193,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let line = Line::from(spans);
     let status =
-        Paragraph::new(line).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        Paragraph::new(line).style(Style::default().bg(STATUS_BAR_BG).fg(STATUS_BAR_FG));
 
     frame.render_widget(status, area);
 }

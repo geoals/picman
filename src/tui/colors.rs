@@ -13,6 +13,8 @@ pub const HEADER_COLOR: Color = Color::White;
 pub const HELP_TEXT: Color = Color::DarkGray;
 pub const SUCCESS_COLOR: Color = Color::Green;
 pub const WARNING_COLOR: Color = Color::Yellow;
+pub const STATUS_BAR_BG: Color = Color::DarkGray;
+pub const STATUS_BAR_FG: Color = Color::White;
 
 /// Format a rating as filled stars only (e.g., "★★★").
 pub fn format_rating(rating: Option<i32>) -> String {
