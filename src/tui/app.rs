@@ -4,6 +4,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+
+use super::mouse::{self, MouseState};
 use ratatui::prelude::*;
 use std::io::stdout;
 use std::path::Path;
@@ -105,6 +107,7 @@ fn run_app(
     state: &mut AppState,
 ) -> Result<()> {
     let mut cancelling = false;
+    let mut mouse_state = MouseState::new();
 
     loop {
         // Check for background operation progress
@@ -118,6 +121,14 @@ fn run_app(
         // Poll for completed preview loads and insert into cache
         state.poll_preview_results();
 
+        // Force full terminal repaint after closing overlays — image protocol
+        // content (kitty/sixel) gets destroyed by overlays and ratatui's diff
+        // alone can't restore it.
+        if state.force_redraw {
+            state.force_redraw = false;
+            terminal.clear()?;
+        }
+
         terminal.draw(|frame| render(frame, state))?;
 
         // Use shorter timeout when background work is happening to update progress
@@ -129,27 +140,35 @@ fn run_app(
 
         // Wait for event with timeout
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     match handle_key(key.code, state)? {
                         KeyAction::Quit => return Ok(()),
                         KeyAction::Cancelling => cancelling = true,
                         KeyAction::Continue => {}
                     }
                 }
+                Event::Mouse(mouse_event) => {
+                    mouse::handle_mouse(mouse_event, state, &mut mouse_state)?;
+                }
+                _ => {}
             }
         }
 
         // Drain all pending events to avoid lag during rapid navigation
         while event::poll(Duration::ZERO)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     match handle_key(key.code, state)? {
                         KeyAction::Quit => return Ok(()),
                         KeyAction::Cancelling => cancelling = true,
                         KeyAction::Continue => {}
                     }
                 }
+                Event::Mouse(mouse_event) => {
+                    mouse::handle_mouse(mouse_event, state, &mut mouse_state)?;
+                }
+                _ => {}
             }
         }
 
@@ -299,24 +318,44 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         return Ok(KeyAction::Continue);
     }
 
+    // Handle help overlay — eat all keys except ? and Esc which close it
+    if state.show_help {
+        match code {
+            KeyCode::Char('?') | KeyCode::Esc => {
+                state.show_help = false;
+                state.force_redraw = true;
+            }
+            _ => {}
+        }
+        return Ok(KeyAction::Continue);
+    }
+
     // Handle operations menu
     if state.operations_menu.is_some() {
         match code {
-            KeyCode::Esc => state.close_operations_menu(),
+            KeyCode::Esc | KeyCode::Char('o') => state.close_operations_menu(),
             KeyCode::Up | KeyCode::Char('k') => state.operations_menu_up(),
             KeyCode::Down | KeyCode::Char('j') => state.operations_menu_down(),
             KeyCode::Enter => state.operations_menu_select(),
-            KeyCode::Char('1') | KeyCode::Char('t') => {
+            KeyCode::Char('1') => {
                 state.close_operations_menu();
                 state.run_operation(crate::tui::state::OperationType::Thumbnails);
             }
-            KeyCode::Char('2') | KeyCode::Char('o') => {
+            KeyCode::Char('2') => {
                 state.close_operations_menu();
                 state.run_operation(crate::tui::state::OperationType::Orientation);
             }
-            KeyCode::Char('3') | KeyCode::Char('h') => {
+            KeyCode::Char('3') => {
                 state.close_operations_menu();
                 state.run_operation(crate::tui::state::OperationType::Hash);
+            }
+            KeyCode::Char('4') => {
+                state.close_operations_menu();
+                state.run_operation(crate::tui::state::OperationType::DirPreview);
+            }
+            KeyCode::Char('5') => {
+                state.close_operations_menu();
+                state.run_operation(crate::tui::state::OperationType::DirPreviewRecursive);
             }
             _ => {}
         }
@@ -351,8 +390,6 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('r') => state.open_rename_dialog()?,
         KeyCode::Char('o') => state.open_operations_menu(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
-        KeyCode::Char('p') => state.run_operation(crate::tui::state::OperationType::DirPreview),
-        KeyCode::Char('P') => state.run_operation(crate::tui::state::OperationType::DirPreviewRecursive),
         KeyCode::Char('?') => state.toggle_help(),
         _ => {}
     }

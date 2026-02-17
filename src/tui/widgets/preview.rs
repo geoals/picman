@@ -760,7 +760,7 @@ fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         let preview_path = match get_cached_dir_preview(dir.id) {
             Some(p) => p,
             None => {
-                let placeholder = Paragraph::new("Press 'p' to generate preview\nPress 'P' for all subdirs");
+                let placeholder = Paragraph::new("Press 'o' → Dir preview to generate");
                 frame.render_widget(placeholder, inner);
                 *cache = None;
                 return;

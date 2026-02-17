@@ -4,6 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use super::colors::{HEADER_COLOR, HELP_TEXT};
 use super::state::AppState;
 use super::widgets::{
     render_details_panel, render_directory_tree, render_file_list, render_filter_dialog,
@@ -50,6 +51,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let tree_area = tree_files_chunks[0];
     let file_list_area = tree_files_chunks[1];
 
+    // Save layout rects for mouse hit-testing
+    state.tree_area = tree_area;
+    state.file_list_area = file_list_area;
+
     // Render widgets
     render_directory_tree(frame, tree_area, state);
     render_file_list(frame, file_list_area, state);
@@ -87,28 +92,51 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
     let dir_name = if menu.directory_path.is_empty() { "." } else { &menu.directory_path };
 
     let options = [
-        ("1/t", "Thumbnails", "Generate preview thumbnails"),
-        ("2/o", "Orientation", "Tag landscape/portrait"),
-        ("3/h", "Hash", "Compute file hashes"),
+        ("1", "Thumbnails",              "Generate preview thumbnails"),
+        ("2", "Orientation",             "Tag landscape/portrait"),
+        ("3", "Hash",                    "Compute file hashes"),
+        ("4", "Dir preview",             "Current directory only"),
+        ("5", "Dir preview (recursive)", "Include subdirectories"),
     ];
 
-    let mut lines = vec![
-        format!("Directory: {} ({} files)", dir_name, menu.file_count),
-        String::new(),
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(" Directory: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(dir_name, Style::default().fg(HEADER_COLOR)),
+            Span::styled(format!(" ({} files)", menu.file_count), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
     ];
 
     for (i, (key, name, desc)) in options.iter().enumerate() {
-        let marker = if i == menu.selected { ">" } else { " " };
-        lines.push(format!("{} [{}] {} - {}", marker, key, name, desc));
+        let is_selected = i == menu.selected;
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled(" ▸ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("[{}] {}", key, name),
+                    Style::default().bg(Color::Cyan).fg(Color::Black),
+                ),
+                Span::styled(format!("  {}", desc), Style::default().fg(Color::White)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw("   "),
+                Span::styled(format!("[{}]", key), Style::default().fg(Color::Cyan)),
+                Span::styled(format!(" {}", name), Style::default().fg(Color::White)),
+                Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
     }
 
-    lines.push(String::new());
-    lines.push("Enter: select  Esc: cancel".to_string());
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " Enter: select  o/Esc: cancel",
+        Style::default().fg(HELP_TEXT),
+    )));
 
-    let text = lines.join("\n");
-
-    let width = 50;
-    let height = 9;
+    let width = 55;
+    let height = 11;
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
 
@@ -116,8 +144,12 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
 
     frame.render_widget(Clear, dialog_area);
 
-    let dialog = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" Operations "));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Operations ")
+        .title_style(Style::default().fg(HEADER_COLOR).add_modifier(Modifier::BOLD));
+
+    let dialog = Paragraph::new(lines).block(block);
 
     frame.render_widget(dialog, dialog_area);
 }
@@ -141,13 +173,17 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     r        Rename directory
     o        Operations menu
     m        Filter
-    p        Dir preview (P=recursive)
     ?        Toggle help
     q        Quit
+
+  Mouse:
+    Click        Select item / focus pane
+    Double-click Open/expand (= Enter)
+    Scroll wheel Move selection up/down
 "#;
 
-    let help_width = 40;
-    let help_height = 17;
+    let help_width = 42;
+    let help_height = 22;
     let x = (area.width.saturating_sub(help_width)) / 2;
     let y = (area.height.saturating_sub(help_height)) / 2;
 

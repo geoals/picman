@@ -1,5 +1,6 @@
 mod app;
 pub mod colors;
+mod mouse;
 pub mod preview_loader;
 pub mod state;
 mod ui;

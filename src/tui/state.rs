@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
+use ratatui::layout::Rect;
 use ratatui::widgets::{ListState, TableState};
 use ratatui_image::protocol::StatefulProtocol;
 
@@ -654,6 +655,13 @@ pub struct AppState {
     pub preview_loader: RefCell<PreviewLoader>,
     /// Current directory ID for tracking stale preview loads
     pub current_dir_id: Option<i64>,
+    /// Force a full terminal redraw on the next frame (needed after closing overlays
+    /// that cover image protocol content — the protocol doesn't know its display was
+    /// destroyed so terminal.clear() is required to make it re-send).
+    pub force_redraw: bool,
+    /// Layout rects saved each frame for mouse hit-testing
+    pub tree_area: Rect,
+    pub file_list_area: Rect,
 }
 
 impl AppState {
@@ -684,6 +692,9 @@ impl AppState {
             skip_preview: false,
             preview_loader: RefCell::new(PreviewLoader::new()),
             current_dir_id: None,
+            force_redraw: false,
+            tree_area: Rect::default(),
+            file_list_area: Rect::default(),
         };
 
         // Load files for initial selection
@@ -831,6 +842,27 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    /// Select a specific index in the directory tree (for mouse clicks).
+    /// No-op if index is out of bounds.
+    pub fn select_tree_index(&mut self, index: usize) {
+        let visible_count = self.get_visible_directories().len();
+        if index < visible_count {
+            self.tree.selected_index = index;
+            self.tree.list_state.select(Some(index));
+            self.files_dirty = true;
+        }
+    }
+
+    /// Select a specific index in the file list (for mouse clicks).
+    /// No-op if index is out of bounds.
+    pub fn select_file_index(&mut self, index: usize) {
+        if index < self.file_list.files.len() {
+            self.file_list.selected_index = index;
+            self.file_list.table_state.select(Some(index));
+            self.skip_preview = true;
+        }
     }
 
     /// Load files for the selected directory if marked as dirty.
@@ -1063,9 +1095,7 @@ impl AppState {
     /// Close the tag input popup without applying
     pub fn close_tag_input(&mut self) {
         self.tag_input = None;
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
     }
 
     /// Apply the selected or entered tag
@@ -1105,9 +1135,7 @@ impl AppState {
         }
 
         self.tag_input = None;
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
         Ok(())
     }
 
@@ -1153,9 +1181,7 @@ impl AppState {
     /// Close the filter dialog without applying
     pub fn close_filter_dialog(&mut self) {
         self.filter_dialog = None;
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
     }
 
     /// Apply the filter from the dialog and close it
@@ -1165,9 +1191,7 @@ impl AppState {
             self.update_matching_directories()?;
         }
         self.filter_dialog = None;
-        // Invalidate preview cache to force full redraw (fixes dialog remnants)
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
         // Reload files with filter applied
         self.load_files_for_selected_directory()?;
         Ok(())
@@ -1183,9 +1207,7 @@ impl AppState {
             dialog.video_only = false;
             dialog.update_tag_filter();
         }
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
         // Reload files without filter
         self.load_files_for_selected_directory()?;
         Ok(())
@@ -1522,9 +1544,7 @@ impl AppState {
     /// Close the rename dialog without applying
     pub fn close_rename_dialog(&mut self) {
         self.rename_dialog = None;
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
     }
 
     /// Apply the rename and close the dialog
@@ -1614,9 +1634,7 @@ impl AppState {
     /// Close the operations menu
     pub fn close_operations_menu(&mut self) {
         self.operations_menu = None;
-        // Invalidate preview cache to force full redraw
-        self.preview_cache.borrow_mut().clear();
-        *self.directory_preview_cache.borrow_mut() = None;
+        self.force_redraw = true;
     }
 
     /// Move selection up in operations menu
@@ -1625,7 +1643,7 @@ impl AppState {
             if menu.selected > 0 {
                 menu.selected -= 1;
             } else {
-                menu.selected = 2; // Wrap to bottom
+                menu.selected = 4; // Wrap to bottom
             }
         }
     }
@@ -1633,7 +1651,7 @@ impl AppState {
     /// Move selection down in operations menu
     pub fn operations_menu_down(&mut self) {
         if let Some(ref mut menu) = self.operations_menu {
-            if menu.selected < 2 {
+            if menu.selected < 4 {
                 menu.selected += 1;
             } else {
                 menu.selected = 0; // Wrap to top
@@ -1658,6 +1676,8 @@ impl AppState {
                 0 => OperationType::Thumbnails,
                 1 => OperationType::Orientation,
                 2 => OperationType::Hash,
+                3 => OperationType::DirPreview,
+                4 => OperationType::DirPreviewRecursive,
                 _ => return,
             }
         } else {
