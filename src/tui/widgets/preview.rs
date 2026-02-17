@@ -4,7 +4,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
 };
-use ratatui_image::{picker::Picker, FilterType, Resize, StatefulImage};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol, FilterType, Resize, StatefulImage};
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
 use crate::db::{Database, Directory};
-use crate::tui::state::{AppState, DirectoryPreviewCache, Focus, PreviewCache};
+use crate::tui::state::{AppState, DirectoryPreviewCache, Focus};
 
 /// Minimal state needed for background directory preview generation
 pub struct TempPreviewState {
@@ -153,8 +153,32 @@ fn get_picker_mutex() -> &'static Mutex<Option<Picker>> {
     })
 }
 
+/// Create a stateful protocol from a DynamicImage (for use with background loader)
+pub fn create_protocol(image: DynamicImage) -> Option<Box<dyn StatefulProtocol>> {
+    let mut picker_guard = get_picker_mutex().lock().ok()?;
+    let picker = picker_guard.as_mut()?;
+    Some(picker.new_resize_protocol(image))
+}
+
+/// Get the preview path for a file (thumbnail or original) and whether it's a thumbnail.
+/// For images: returns cached thumbnail if exists, otherwise original
+/// For videos: returns cached thumbnail if exists, otherwise None
+pub fn get_preview_path_for_file(file_path: &Path) -> Option<(PathBuf, bool)> {
+    if is_image_file(file_path) {
+        match get_cached_image_thumbnail(file_path) {
+            Some(thumb) => Some((thumb, true)),
+            None => Some((file_path.to_path_buf(), false)), // Fall back to original image
+        }
+    } else if is_video_file(file_path) {
+        // For videos, only use cached thumbnail (don't generate during preload)
+        get_cached_video_thumbnail(file_path).map(|thumb| (thumb, true))
+    } else {
+        None
+    }
+}
+
 /// Read EXIF orientation and apply rotation/flip to image
-fn apply_exif_orientation(path: &Path, img: DynamicImage) -> DynamicImage {
+pub fn apply_exif_orientation(path: &Path, img: DynamicImage) -> DynamicImage {
     let orientation = (|| {
         let file = std::fs::File::open(path).ok()?;
         let mut bufreader = BufReader::new(file);
@@ -844,58 +868,53 @@ fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     // Check if we need to load a new image (cache miss)
     // For videos, we cache by the original file path, not the thumbnail path
     let mut cache = state.preview_cache.borrow_mut();
-    let needs_load = match cache.as_ref() {
-        Some(c) => c.path != file_path,
-        None => true,
-    };
 
-    if needs_load {
-        // Get mutable access to picker
-        let mut picker_guard = match get_picker_mutex().lock() {
-            Ok(g) => g,
-            Err(_) => {
-                let error = Paragraph::new("Preview unavailable");
-                frame.render_widget(error, inner);
-                return;
-            }
-        };
+    // Check if already in cache
+    let in_cache = cache.contains(&file_path);
 
-        let picker = match picker_guard.as_mut() {
-            Some(p) => p,
-            None => {
-                let placeholder = Paragraph::new(
-                    "Image preview not available\n(terminal doesn't support graphics)",
-                );
-                frame.render_widget(placeholder, inner);
-                return;
-            }
-        };
-
-        // Load the image - apply EXIF orientation only for original files (thumbnails have it baked in)
-        let image = match image::open(&preview_path) {
-            Ok(img) => {
-                if is_thumbnail {
-                    img
-                } else {
-                    apply_exif_orientation(&preview_path, img)
-                }
-            }
-            Err(_) => {
-                *cache = None;
-                let error = Paragraph::new("Failed to load preview");
-                frame.render_widget(error, inner);
-                return;
-            }
-        };
-
-        // Create protocol for the image
-        let protocol = picker.new_resize_protocol(image);
-        // Cache by original file path so video thumbnails work correctly
-        *cache = Some(PreviewCache::new(file_path, protocol));
+    // During rapid navigation (skip_preview), don't block to load new images
+    // Show cached version or last displayed image instead
+    if state.skip_preview && !in_cache {
+        // Show the most recently accessed cached image (stale but no stutter)
+        if let Some(preview) = cache.get_last_accessed_mut() {
+            let image_widget =
+                StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+            frame.render_stateful_widget(image_widget, inner, &mut preview.protocol);
+        }
+        return;
     }
 
-    // Render the cached image
-    if let Some(ref mut preview) = *cache {
+    if in_cache {
+        // Cache hit - render the cached image
+        if let Some(preview) = cache.get_mut(&file_path) {
+            let image_widget =
+                StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
+            frame.render_stateful_widget(image_widget, inner, &mut preview.protocol);
+        }
+        return;
+    }
+
+    // Cache miss - queue background load (never block on image::open)
+    let mut loader = state.preview_loader.borrow_mut();
+    let is_pending = loader.is_pending(&file_path);
+
+    if !is_pending {
+        // Queue background load
+        if let Some(dir_id) = state.current_dir_id {
+            loader.queue_load(
+                file_path.clone(),
+                preview_path.clone(),
+                is_thumbnail,
+                dir_id,
+            );
+        }
+    }
+
+    // Drop the loader borrow before accessing cache again
+    drop(loader);
+
+    // While waiting for background load, show the last cached image (stale but no stutter)
+    if let Some(preview) = cache.get_last_accessed_mut() {
         let image_widget =
             StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
         frame.render_stateful_widget(image_widget, inner, &mut preview.protocol);

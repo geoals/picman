@@ -13,6 +13,7 @@ use ratatui_image::protocol::StatefulProtocol;
 use crate::db::{Database, Directory, File};
 use crate::scanner::detect_orientation;
 use crate::suggestions::extract_suggested_words;
+use crate::tui::preview_loader::PreviewLoader;
 
 /// Rating filter options
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -291,6 +292,85 @@ impl PreviewCache {
     }
 }
 
+/// LRU cache for decoded image previews
+/// Holds up to `max_size` entries, evicting least-recently-used when full.
+/// Designed for ~200 decoded images (~1GB memory).
+pub struct LruPreviewCache {
+    /// Map of path -> cached preview
+    entries: std::collections::HashMap<PathBuf, PreviewCache>,
+    /// Access order: most recently used at back, least at front
+    access_order: VecDeque<PathBuf>,
+    /// Maximum number of entries
+    max_size: usize,
+}
+
+impl LruPreviewCache {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            access_order: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    /// Insert a preview into the cache, evicting oldest if over capacity
+    pub fn insert(&mut self, path: PathBuf, protocol: Box<dyn StatefulProtocol>) {
+        // If already in cache, remove from access order (will re-add at end)
+        if self.entries.contains_key(&path) {
+            self.access_order.retain(|p| p != &path);
+        }
+
+        // Evict if at capacity
+        while self.entries.len() >= self.max_size && !self.access_order.is_empty() {
+            if let Some(oldest) = self.access_order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+
+        // Insert new entry
+        self.entries.insert(path.clone(), PreviewCache::new(path.clone(), protocol));
+        self.access_order.push_back(path);
+    }
+
+    /// Get a cached preview, updating access order
+    pub fn get_mut(&mut self, path: &PathBuf) -> Option<&mut PreviewCache> {
+        if self.entries.contains_key(path) {
+            // Update access order: move to back (most recent)
+            self.access_order.retain(|p| p != path);
+            self.access_order.push_back(path.clone());
+            self.entries.get_mut(path)
+        } else {
+            None
+        }
+    }
+
+    /// Check if cache contains a path
+    pub fn contains(&self, path: &PathBuf) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    /// Clear all entries
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.access_order.clear();
+    }
+
+    /// Get number of entries
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Get the most recently accessed entry (for showing stale preview during rapid scroll)
+    pub fn get_last_accessed_mut(&mut self) -> Option<&mut PreviewCache> {
+        self.access_order.back().and_then(|path| self.entries.get_mut(path))
+    }
+}
+
 /// Cached directory preview state (2x2 composite image)
 pub struct DirectoryPreviewCache {
     pub dir_id: i64,
@@ -537,6 +617,9 @@ pub struct BackgroundProgress {
     pub start_time: Instant,
 }
 
+/// Default LRU cache size (~200 decoded images, ~1GB memory)
+const DEFAULT_PREVIEW_CACHE_SIZE: usize = 200;
+
 /// Main application state
 pub struct AppState {
     pub library_path: PathBuf,
@@ -545,7 +628,7 @@ pub struct AppState {
     pub tree: TreeState,
     pub file_list: FileListState,
     pub show_help: bool,
-    pub preview_cache: RefCell<Option<PreviewCache>>,
+    pub preview_cache: RefCell<LruPreviewCache>,
     pub directory_preview_cache: RefCell<Option<DirectoryPreviewCache>>,
     pub tag_input: Option<TagInputState>,
     pub filter_dialog: Option<FilterDialogState>,
@@ -563,6 +646,14 @@ pub struct AppState {
     pub operation_queue: VecDeque<OperationType>,
     /// Cache for missing preview check: (dir_id, is_missing)
     pub missing_preview_cache: RefCell<Option<(i64, bool)>>,
+    /// True when file list needs to be reloaded (deferred loading for smooth scrolling)
+    pub files_dirty: bool,
+    /// Skip loading new previews during rapid navigation (show cached instead)
+    pub skip_preview: bool,
+    /// Background image loader - decodes images off the main thread
+    pub preview_loader: RefCell<PreviewLoader>,
+    /// Current directory ID for tracking stale preview loads
+    pub current_dir_id: Option<i64>,
 }
 
 impl AppState {
@@ -577,7 +668,7 @@ impl AppState {
             tree,
             file_list: FileListState::new(),
             show_help: false,
-            preview_cache: RefCell::new(None),
+            preview_cache: RefCell::new(LruPreviewCache::new(DEFAULT_PREVIEW_CACHE_SIZE)),
             directory_preview_cache: RefCell::new(None),
             tag_input: None,
             filter_dialog: None,
@@ -589,6 +680,10 @@ impl AppState {
             background_progress: None,
             operation_queue: VecDeque::new(),
             missing_preview_cache: RefCell::new(None),
+            files_dirty: false,
+            skip_preview: false,
+            preview_loader: RefCell::new(PreviewLoader::new()),
+            current_dir_id: None,
         };
 
         // Load files for initial selection
@@ -603,7 +698,14 @@ impl AppState {
         self.file_list.selected_index = 0;
         self.file_list.table_state.select(Some(0));
 
-        if let Some(dir) = self.get_selected_directory() {
+        // Clear preview cache on directory change to avoid showing wrong directory's previews
+        self.preview_cache.borrow_mut().clear();
+
+        let selected_dir = self.get_selected_directory().cloned();
+        if let Some(dir) = selected_dir {
+            // Update current directory ID and notify preview loader
+            self.current_dir_id = Some(dir.id);
+            self.preview_loader.borrow_mut().set_current_dir(dir.id);
             let files = self.db.get_files_in_directory(dir.id)?;
 
             // Check if this directory or any ancestor matches the full filter criteria
@@ -617,8 +719,14 @@ impl AppState {
                 vec![]
             };
 
+            // Batch fetch all tags for files in this directory (single query instead of N)
+            let all_file_tags = self.db.get_file_tags_for_directory(dir.id)?;
+
             for file in files {
-                let tags = self.db.get_file_tags(file.id)?;
+                let tags = all_file_tags
+                    .get(&file.id)
+                    .cloned()
+                    .unwrap_or_default();
 
                 // Apply filter if active AND no ancestor matches the full filter
                 if self.filter.is_active() && !ancestor_matches_filter {
@@ -677,7 +785,8 @@ impl AppState {
                         self.tree.selected_index = 0; // Wrap to top
                     }
                     self.tree.list_state.select(Some(self.tree.selected_index));
-                    self.load_files_for_selected_directory()?;
+                    // Defer file loading until after rapid navigation stops
+                    self.files_dirty = true;
                 }
             }
             Focus::FileList => {
@@ -688,6 +797,8 @@ impl AppState {
                         self.file_list.selected_index = 0; // Wrap to top
                     }
                     self.file_list.table_state.select(Some(self.file_list.selected_index));
+                    // Skip loading new preview during rapid navigation
+                    self.skip_preview = true;
                 }
             }
         }
@@ -705,7 +816,8 @@ impl AppState {
                         self.tree.selected_index = visible_count - 1; // Wrap to bottom
                     }
                     self.tree.list_state.select(Some(self.tree.selected_index));
-                    self.load_files_for_selected_directory()?;
+                    // Defer file loading until after rapid navigation stops
+                    self.files_dirty = true;
                 }
             }
             Focus::FileList => {
@@ -716,10 +828,93 @@ impl AppState {
                         self.file_list.selected_index = self.file_list.files.len() - 1; // Wrap to bottom
                     }
                     self.file_list.table_state.select(Some(self.file_list.selected_index));
+                    // Skip loading new preview during rapid navigation
+                    self.skip_preview = true;
                 }
             }
         }
         Ok(())
+    }
+
+    /// Load files for the selected directory if marked as dirty.
+    /// Called after event loop drains all pending keypresses.
+    pub fn load_files_if_dirty(&mut self) -> Result<()> {
+        if self.files_dirty {
+            self.load_files_for_selected_directory()?;
+            self.files_dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Clear the skip_preview flag after rapid navigation stops.
+    /// Called after event loop drains all pending keypresses.
+    pub fn clear_skip_preview(&mut self) {
+        self.skip_preview = false;
+    }
+
+    /// Poll for completed background preview loads and insert into cache.
+    /// Called at the start of each render cycle.
+    /// Also preloads other files in the current directory.
+    pub fn poll_preview_results(&self) {
+        use crate::tui::widgets::create_protocol;
+
+        let results = self.preview_loader.borrow_mut().poll_results();
+        let mut loaded_count = 0;
+
+        for result in results {
+            if let Some(image) = result.image {
+                // Create protocol on main thread (picker is not thread-safe)
+                if let Some(protocol) = create_protocol(image) {
+                    self.preview_cache.borrow_mut().insert(result.path, protocol);
+                    loaded_count += 1;
+                }
+            }
+        }
+
+        // After successfully loading images, preload other files in the directory
+        if loaded_count > 0 {
+            self.preload_directory_files();
+        }
+    }
+
+    /// Preload all image/video files in the current directory that aren't already cached or pending.
+    fn preload_directory_files(&self) {
+        use crate::tui::widgets::get_preview_path_for_file;
+
+        let dir_id = match self.current_dir_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let dir = match self.get_selected_directory() {
+            Some(d) => d.clone(),
+            None => return,
+        };
+
+        let mut loader = self.preview_loader.borrow_mut();
+        let cache = self.preview_cache.borrow();
+
+        for file_with_tags in &self.file_list.files {
+            let file_path = if dir.path.is_empty() {
+                self.library_path.join(&file_with_tags.file.filename)
+            } else {
+                self.library_path.join(&dir.path).join(&file_with_tags.file.filename)
+            };
+
+            // Skip if already cached or pending
+            if cache.contains(&file_path) || loader.is_pending(&file_path) {
+                continue;
+            }
+
+            // Determine preview path (thumbnail or original)
+            // Skip if no preview available (non-image/video file or missing video thumbnail)
+            let (preview_path, is_thumbnail) = match get_preview_path_for_file(&file_path) {
+                Some(result) => result,
+                None => continue,
+            };
+
+            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id);
+        }
     }
 
     pub fn move_left(&mut self) {
@@ -880,7 +1075,7 @@ impl AppState {
     pub fn close_tag_input(&mut self) {
         self.tag_input = None;
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
     }
 
@@ -922,7 +1117,7 @@ impl AppState {
 
         self.tag_input = None;
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
         Ok(())
     }
@@ -970,7 +1165,7 @@ impl AppState {
     pub fn close_filter_dialog(&mut self) {
         self.filter_dialog = None;
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
     }
 
@@ -982,7 +1177,7 @@ impl AppState {
         }
         self.filter_dialog = None;
         // Invalidate preview cache to force full redraw (fixes dialog remnants)
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
         // Reload files with filter applied
         self.load_files_for_selected_directory()?;
@@ -1000,7 +1195,7 @@ impl AppState {
             dialog.update_tag_filter();
         }
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
         // Reload files without filter
         self.load_files_for_selected_directory()?;
@@ -1339,7 +1534,7 @@ impl AppState {
     pub fn close_rename_dialog(&mut self) {
         self.rename_dialog = None;
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
     }
 
@@ -1397,7 +1592,7 @@ impl AppState {
         self.rename_dialog = None;
 
         // Invalidate caches
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
 
         Ok(())
@@ -1431,7 +1626,7 @@ impl AppState {
     pub fn close_operations_menu(&mut self) {
         self.operations_menu = None;
         // Invalidate preview cache to force full redraw
-        *self.preview_cache.borrow_mut() = None;
+        self.preview_cache.borrow_mut().clear();
         *self.directory_preview_cache.borrow_mut() = None;
     }
 
@@ -1808,7 +2003,7 @@ impl AppState {
                 }
                 self.background_progress = None;
                 // Clear preview caches to reload
-                *self.preview_cache.borrow_mut() = None;
+                self.preview_cache.borrow_mut().clear();
                 *self.missing_preview_cache.borrow_mut() = None;
 
                 // Start next queued operation if any
@@ -1894,6 +2089,27 @@ mod tests {
         state.use_suggestion();
         assert_eq!(state.new_name, "beta");
         assert_eq!(state.cursor_pos, 4);
+    }
+
+    // ==================== LruPreviewCache Tests ====================
+
+    // Note: We can't fully test LruPreviewCache with actual protocols in unit tests
+    // because StatefulProtocol requires terminal capabilities. Testing basic operations.
+
+    #[test]
+    fn test_lru_preview_cache_basic() {
+        // Test that the cache structure works (without actual protocols)
+        let cache = LruPreviewCache::new(3);
+        assert_eq!(cache.len(), 0);
+        assert!(!cache.contains(&PathBuf::from("test.jpg")));
+    }
+
+    #[test]
+    fn test_lru_preview_cache_clear() {
+        let mut cache = LruPreviewCache::new(3);
+        // Clear should work on empty cache
+        cache.clear();
+        assert_eq!(cache.len(), 0);
     }
 
     // ==================== FilterDialogState Tests ====================

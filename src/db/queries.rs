@@ -560,6 +560,42 @@ impl Database {
         Ok(result)
     }
 
+    /// Get file tags for all files in a directory as a map (file_id -> list of tag names)
+    /// Single query instead of N queries for N files.
+    #[instrument(skip(self))]
+    pub fn get_file_tags_for_directory(
+        &self,
+        directory_id: i64,
+    ) -> Result<std::collections::HashMap<i64, Vec<String>>> {
+        use std::collections::HashMap;
+
+        let mut stmt = self.connection().prepare(
+            "SELECT ft.file_id, t.name FROM file_tags ft
+             JOIN tags t ON ft.tag_id = t.id
+             JOIN files f ON ft.file_id = f.id
+             WHERE f.directory_id = ?1
+             ORDER BY ft.file_id, t.name",
+        )?;
+
+        let mut result: HashMap<i64, Vec<String>> = HashMap::new();
+
+        let rows = stmt.query_map([directory_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (file_id, tag_name) = row?;
+            result.entry(file_id).or_default().push(tag_name);
+        }
+
+        debug!(
+            directory_id,
+            count = result.len(),
+            "loaded file tags for directory"
+        );
+        Ok(result)
+    }
+
     /// Get all tags in the database
     pub fn get_all_tags(&self) -> Result<Vec<String>> {
         let mut stmt = self
@@ -1441,6 +1477,39 @@ mod tests {
 
         // file3 should not be in the map (no tags)
         assert!(all_tags.get(&file3_id).is_none());
+    }
+
+    #[test]
+    fn test_get_file_tags_for_directory() {
+        let db = Database::open_in_memory().unwrap();
+
+        let dir1_id = db.insert_directory("photos", None, None).unwrap();
+        let dir2_id = db.insert_directory("videos", None, None).unwrap();
+
+        // Insert files with various tags
+        let file1_id = db.insert_file(dir1_id, "photo1.jpg", 1024, 12345, Some("image")).unwrap();
+        let file2_id = db.insert_file(dir1_id, "photo2.jpg", 1024, 12346, Some("image")).unwrap();
+        let file3_id = db.insert_file(dir2_id, "video1.mp4", 1024, 12347, Some("video")).unwrap();
+
+        db.add_file_tag(file1_id, "landscape").unwrap();
+        db.add_file_tag(file1_id, "vacation").unwrap();
+        db.add_file_tag(file2_id, "portrait").unwrap();
+        db.add_file_tag(file3_id, "action").unwrap();
+
+        // Get file tags only for dir1
+        let dir1_tags = db.get_file_tags_for_directory(dir1_id).unwrap();
+
+        // Should only contain files from dir1
+        assert_eq!(dir1_tags.len(), 2);
+        assert!(dir1_tags.contains_key(&file1_id));
+        assert!(dir1_tags.contains_key(&file2_id));
+        assert!(!dir1_tags.contains_key(&file3_id));
+
+        // file1 should have 2 tags
+        let file1_tags = dir1_tags.get(&file1_id).unwrap();
+        assert_eq!(file1_tags.len(), 2);
+        assert!(file1_tags.contains(&"landscape".to_string()));
+        assert!(file1_tags.contains(&"vacation".to_string()));
     }
 
     #[test]

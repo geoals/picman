@@ -115,6 +115,9 @@ fn run_app(
             return Ok(());
         }
 
+        // Poll for completed preview loads and insert into cache
+        state.poll_preview_results();
+
         terminal.draw(|frame| render(frame, state))?;
 
         // Use shorter timeout when background work is happening to update progress
@@ -149,6 +152,10 @@ fn run_app(
                 }
             }
         }
+
+        // After draining all keypresses, process deferred updates
+        state.load_files_if_dirty()?;
+        state.clear_skip_preview();
     }
 }
 
