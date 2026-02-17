@@ -70,9 +70,18 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         || state.operations_menu.is_some();
 
     if has_modal {
+        // Skip the inner preview area — kitty image placeholders corrupt when restyled
+        let preview_inner = Block::default().borders(Borders::ALL).inner(preview_area);
         let buf = frame.buffer_mut();
         for y in size.top()..size.bottom() {
             for x in size.left()..size.right() {
+                if x >= preview_inner.left()
+                    && x < preview_inner.right()
+                    && y >= preview_inner.top()
+                    && y < preview_inner.bottom()
+                {
+                    continue;
+                }
                 let cell = &mut buf[(x, y)];
                 cell.set_style(
                     cell.style()
