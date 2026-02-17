@@ -1,5 +1,47 @@
 # Picman Development Guidelines
 
+## Architecture
+
+TUI photo library manager (ratatui) + CLI tools (clap) + web server (axum), backed by SQLite.
+
+### Module map
+
+- **`src/main.rs`** — CLI arg parsing (`Commands` enum), dispatches to CLI subcommands, TUI, or web server
+- **`src/lib.rs`** — Crate root, declares all modules
+- **`src/cli/`** — CLI subcommands, each in its own file. `mod.rs` re-exports `run_*` functions. To add a command: add variant to `Commands` in `main.rs`, create `src/cli/foo.rs`, re-export from `mod.rs`
+- **`src/tui/`** — Terminal UI
+  - `app.rs` — Event loop, key dispatch, background operation spawning
+  - `state.rs` — `AppState` (all TUI state), `TreeState`, `FileListState`, `Focus` enum
+  - `operations.rs` — `OperationType` enum, `BackgroundProgress`, operation queue logic
+  - `preview_loader.rs` — Background image loading thread, channel-based
+  - `preview_cache.rs` — LRU cache for decoded preview images
+  - `dialogs.rs` — Dialog state types (tag popup, filter, rename, operations menu)
+  - `colors.rs` — Semantic color constants (see TUI Colors section below)
+  - `mouse.rs` — Mouse event handling
+  - `widgets/` — One file per UI component: `directory_tree`, `file_list`, `preview`, `details_panel`, `status_bar`, `filter_dialog`, `tag_popup`, `rename_dialog`
+- **`src/serve/`** — Web UI (axum + tokio)
+  - `mod.rs` — Router setup, `AppState` (Arc<Mutex<Database>>), `run_serve()`
+  - `handlers.rs` — REST API handlers (directories, files, ratings, tags, thumbnails)
+  - `models.rs` — JSON request/response types
+  - `assets/` — Embedded SPA (index.html, app.js, style.css)
+- **`src/db/`** — SQLite layer
+  - `schema.rs` — `Database` struct, table creation, migrations
+  - `directories.rs` — `Directory` type and directory queries
+  - `files.rs` — `File`, `FileToHash` types and file queries
+  - `tags.rs` — Tag queries (batch fetching for performance)
+  - `filters.rs` — Filtered file/directory queries
+- **`src/thumbnails.rs`** — Thumbnail and directory preview generation (images + ffmpeg for video)
+- **`src/scanner.rs`** — Filesystem traversal (walkdir)
+- **`src/hash.rs`** — xxHash3-64 file hashing
+- **`src/suggestions.rs`** — Word suggestions for directory rename
+- **`src/logging.rs`** — Tracing setup (file-based, enabled via `PICMAN_LOG`)
+
+### Key patterns
+
+- **TUI background ops**: Spawn thread in `app.rs`, share `BackgroundProgress` (AtomicUsize counters), poll via channel in event loop
+- **Database**: All access through `Database` struct methods. TUI owns it directly; web server wraps in `Arc<Mutex<>>`
+- **Thumbnails**: Cached to `~/.cache/picman/thumbnails/` (1440p) and `~/.cache/picman/web-thumbnails/` (400px for web grid)
+
 ## Performance is Key
 
 This application must remain responsive even on slow HDDs with large photo libraries (100k+ files). Every feature should be designed with performance in mind.
