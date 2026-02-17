@@ -6,12 +6,11 @@ use ratatui::{
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, FilterType, Resize, StatefulImage};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use crate::db::Directory;
 use crate::thumbnails::{
-    self, generate_dir_preview_from_paths, generate_video_thumbnail, get_cached_dir_preview,
-    get_preview_path_for_file, is_image_file,
+    self, generate_dir_preview_from_paths, get_cached_dir_preview, is_image_file,
 };
 use crate::tui::colors::UNFOCUS_COLOR;
 use crate::tui::state::{AppState, Focus};
@@ -202,7 +201,17 @@ fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
-    // Cache miss — load from disk
+    // Cache miss — check if already loading
+    {
+        let loader = state.preview_loader.borrow();
+        if loader.is_pending(&key) {
+            let placeholder = Paragraph::new("Loading preview...");
+            frame.render_widget(placeholder, inner);
+            return;
+        }
+    }
+
+    // Try to find the cached composite on disk (1 stat — acceptable, once per uncached dir)
     let preview_path = match get_cached_dir_preview(dir.id) {
         Some(p) => p,
         None => {
@@ -212,29 +221,16 @@ fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    let image = match image::open(&preview_path) {
-        Ok(img) => img,
-        Err(_) => {
-            let error = Paragraph::new("Failed to load preview");
-            frame.render_widget(error, inner);
-            return;
-        }
-    };
-
-    let arc = Arc::new(image);
-    let protocol = create_protocol((*arc).clone());
-
-    let mut cache = state.dir_preview_cache.borrow_mut();
-    cache.insert(key.clone(), arc, protocol);
-
-    // Render the just-inserted entry
-    if let Some(entry) = cache.get_mut(&key) {
-        if let Some(ref mut protocol) = entry.protocol {
-            let image_widget =
-                StatefulImage::new(None).resize(Resize::Fit(Some(FilterType::Lanczos3)));
-            frame.render_stateful_widget(image_widget, inner, protocol);
+    // Queue for background decoding — no image::open() on the UI thread
+    {
+        let mut loader = state.preview_loader.borrow_mut();
+        if let Some(dir_id) = state.current_dir_id {
+            loader.queue_dir_load(key, preview_path, dir_id);
         }
     }
+
+    let placeholder = Paragraph::new("Loading preview...");
+    frame.render_widget(placeholder, inner);
 }
 
 /// Render file preview (single image/video thumbnail)
@@ -307,42 +303,12 @@ fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
-    // Not in cache at all — need to load from disk.
-    // Cache miss — resolve the preview path (disk I/O deferred to here,
-    // only runs when we actually need to queue a new load)
-    let load_args = if thumbnails::is_image_file(&file_path) {
-        match get_preview_path_for_file(&file_path) {
-            Some((path, is_thumb)) => Some((path, is_thumb)),
-            None => Some((file_path.clone(), false)),
-        }
-    } else {
-        // Video: try cached thumbnail, auto-generate if missing
-        match get_preview_path_for_file(&file_path)
-            .or_else(|| generate_video_thumbnail(&file_path).map(|thumb| (thumb, true)))
-        {
-            Some((path, is_thumb)) => Some((path, is_thumb)),
-            None => {
-                let info = format!(
-                    "{}\n\nFailed to generate thumbnail",
-                    file_path.file_name().unwrap_or_default().to_string_lossy()
-                );
-                let placeholder = Paragraph::new(info).alignment(Alignment::Center);
-                frame.render_widget(placeholder, inner);
-                return;
-            }
-        }
-    };
-
-    if let Some((preview_path, is_thumbnail)) = load_args {
+    // Not in cache — queue for background loading (all disk I/O on worker thread)
+    {
         let mut loader = state.preview_loader.borrow_mut();
         if !loader.is_pending(&file_path) {
             if let Some(dir_id) = state.current_dir_id {
-                loader.queue_load(
-                    file_path,
-                    preview_path,
-                    is_thumbnail,
-                    dir_id,
-                );
+                loader.queue_file_load(file_path, dir_id);
             }
         }
     }

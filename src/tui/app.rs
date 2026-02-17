@@ -137,14 +137,16 @@ fn run_app(
 
         // Use shorter timeout when we're waiting for async work:
         // - Background operations (thumbnails, hashing): 100ms for progress updates
-        // - Pending preview: 50ms so the worker result is picked up promptly
+        // - Pending preview: 5ms so the worker result is picked up promptly
         // - Idle: 1 second to save CPU
         let preview_ready = match state.focus {
             Focus::FileList => match state.selected_file_path() {
                 Some(sel) => state.preview_cache.borrow().has_protocol(&sel),
                 None => true,
             },
-            _ => true,
+            Focus::DirectoryTree => {
+                state.preview_loader.borrow().pending_count() == 0
+            }
         };
 
         let timeout = if state.background_progress.is_some() {

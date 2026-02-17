@@ -424,17 +424,21 @@ impl AppState {
 
     /// Poll for completed background preview loads and insert into cache.
     /// Called at the start of each render cycle.
+    /// Routes results to the appropriate cache based on `is_dir_preview`.
     /// Also preloads other files in the current directory.
     pub fn poll_preview_results(&self) {
         let results = self.preview_loader.borrow_mut().poll_results();
 
         for result in results {
-            let mut cache = self.preview_cache.borrow_mut();
+            let mut cache = if result.is_dir_preview {
+                self.dir_preview_cache.borrow_mut()
+            } else {
+                self.preview_cache.borrow_mut()
+            };
+
             if let Some(image) = result.image {
-                // Insert image and protocol together into the cache
                 cache.insert(result.path.clone(), image, result.protocol);
             } else if let Some(protocol) = result.protocol {
-                // Protocol only (shouldn't happen with current design, but handle gracefully)
                 cache.set_protocol(&result.path, protocol);
             }
         }
@@ -452,8 +456,11 @@ impl AppState {
     ///
     /// When the selection moves to an uncached file, bumps the load generation
     /// so the worker skips stale requests from the previous position instantly.
+    ///
+    /// No disk I/O happens here — extension checks are pure string ops, and
+    /// thumbnail path resolution is deferred to the worker thread.
     fn preload_directory_files(&self) {
-        use crate::thumbnails::get_preview_path_for_file;
+        use crate::thumbnails::{is_image_file, is_video_file};
 
         let dir_id = match self.current_dir_id {
             Some(id) => id,
@@ -509,16 +516,16 @@ impl AppState {
                     .join(&file_with_tags.file.filename)
             };
 
+            // Extension-only filter — no stat() calls
+            if !is_image_file(&file_path) && !is_video_file(&file_path) {
+                continue;
+            }
+
             if cache.contains(&file_path) || loader.is_pending(&file_path) {
                 continue;
             }
 
-            let (preview_path, is_thumbnail) = match get_preview_path_for_file(&file_path) {
-                Some(result) => result,
-                None => continue,
-            };
-
-            loader.queue_load(file_path, preview_path, is_thumbnail, dir_id);
+            loader.queue_file_load(file_path, dir_id);
         }
     }
 

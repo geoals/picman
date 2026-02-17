@@ -8,14 +8,21 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 
-use crate::thumbnails::{apply_exif_orientation, is_image_file};
+use crate::thumbnails::{
+    apply_exif_orientation, generate_video_thumbnail, get_preview_path_for_file, is_image_file,
+    is_video_file,
+};
 use super::widgets::create_protocol;
 
-/// Request to load an image in the background
+/// Request to load an image in the background.
+///
+/// `preview_path: None` → worker resolves thumbnail path via `get_preview_path_for_file`
+/// (moves the stat() calls off the UI thread).
+/// `preview_path: Some(...)` → worker loads directly from that path (used for dir previews).
 pub struct LoadRequest {
     pub path: PathBuf,
-    pub preview_path: PathBuf,
-    pub is_thumbnail: bool,
+    pub preview_path: Option<PathBuf>,
+    pub is_dir_preview: bool,
     pub dir_id: i64,
     generation: u64,
 }
@@ -26,6 +33,7 @@ pub struct LoadResult {
     pub path: PathBuf,
     pub image: Option<Arc<DynamicImage>>,
     pub protocol: Option<Box<dyn StatefulProtocol>>,
+    pub is_dir_preview: bool,
 }
 
 fn pack_area(width: u16, height: u16) -> u32 {
@@ -131,14 +139,26 @@ impl PreviewLoader {
         self.pending.len()
     }
 
-    /// Queue an image to be loaded in the background.
-    /// The worker always creates a render protocol after decoding.
-    /// Returns true if queued, false if already pending.
-    pub fn queue_load(
+    /// Queue a file preview. Worker resolves thumbnail path — zero stat() on UI thread.
+    pub fn queue_file_load(&mut self, path: PathBuf, dir_id: i64) -> bool {
+        self.queue_load_inner(path, None, false, dir_id)
+    }
+
+    /// Queue a directory composite preview with an explicit disk path.
+    pub fn queue_dir_load(
+        &mut self,
+        cache_key: PathBuf,
+        preview_path: PathBuf,
+        dir_id: i64,
+    ) -> bool {
+        self.queue_load_inner(cache_key, Some(preview_path), true, dir_id)
+    }
+
+    fn queue_load_inner(
         &mut self,
         path: PathBuf,
-        preview_path: PathBuf,
-        is_thumbnail: bool,
+        preview_path: Option<PathBuf>,
+        is_dir_preview: bool,
         dir_id: i64,
     ) -> bool {
         if self.pending.contains(&path) {
@@ -149,7 +169,7 @@ impl PreviewLoader {
         let request = LoadRequest {
             path: path.clone(),
             preview_path,
-            is_thumbnail,
+            is_dir_preview,
             dir_id,
             generation,
         };
@@ -218,8 +238,21 @@ fn downscale_for_cache(image: DynamicImage) -> DynamicImage {
     }
 }
 
+/// Resolve preview path for a file: try cached thumbnail, then video thumbnail generation.
+/// Returns (load_path, is_thumbnail). Called on the worker thread — all stat() happens here.
+fn resolve_preview_path(path: &Path) -> Option<(PathBuf, bool)> {
+    get_preview_path_for_file(path).or_else(|| {
+        if is_video_file(path) {
+            generate_video_thumbnail(path).map(|thumb| (thumb, true))
+        } else {
+            None
+        }
+    })
+}
+
 /// Handle a load-from-disk request: decode image and create a render protocol.
 /// Stale requests (wrong directory or generation) are silently dropped.
+/// Dir-preview requests skip generation staleness (infrequent, always worth processing).
 fn handle_load(
     request: LoadRequest,
     result_tx: &Sender<LoadResult>,
@@ -231,18 +264,41 @@ fn handle_load(
     if request.dir_id != current_dir_id.load(Ordering::Relaxed) {
         return;
     }
-    if request.generation != load_generation.load(Ordering::Relaxed) {
+    // Dir previews skip generation check (infrequent, always worth processing)
+    if !request.is_dir_preview
+        && request.generation != load_generation.load(Ordering::Relaxed)
+    {
         return;
     }
 
+    // Resolve the preview path: explicit for dir previews, worker-resolved for files
+    let (load_path, is_thumbnail) = match request.preview_path {
+        Some(p) => (p, true), // dir composites have no EXIF, treat as thumbnail
+        None => match resolve_preview_path(&request.path) {
+            Some(result) => result,
+            None => {
+                // No preview available (e.g., image file with no original and no thumbnail)
+                let _ = result_tx.send(LoadResult {
+                    path: request.path,
+                    image: None,
+                    protocol: None,
+                    is_dir_preview: request.is_dir_preview,
+                });
+                return;
+            }
+        },
+    };
+
     // Load and decode the image
-    let image = load_image(&request.preview_path, request.is_thumbnail);
+    let image = load_image(&load_path, is_thumbnail);
 
     // Re-check after decode — directory or generation may have changed
     if request.dir_id != current_dir_id.load(Ordering::Relaxed) {
         return;
     }
-    if request.generation != load_generation.load(Ordering::Relaxed) {
+    if !request.is_dir_preview
+        && request.generation != load_generation.load(Ordering::Relaxed)
+    {
         return;
     }
 
@@ -257,6 +313,7 @@ fn handle_load(
         path: request.path,
         image: arc_image,
         protocol,
+        is_dir_preview: request.is_dir_preview,
     });
 }
 
@@ -313,28 +370,50 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_load_tracks_pending() {
+    fn test_queue_file_load_tracks_pending() {
         let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        let queued = loader.queue_load(
-            path.clone(),
-            path.clone(),
-            false,
-            1,
-        );
+        let queued = loader.queue_file_load(path.clone(), 1);
 
         assert!(queued);
         assert!(loader.is_pending(&path));
     }
 
     #[test]
-    fn test_queue_load_deduplicates() {
+    fn test_queue_file_load_deduplicates() {
         let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
-        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(loader.queue_file_load(path.clone(), 1));
+        assert!(!loader.queue_file_load(path.clone(), 1));
+    }
+
+    #[test]
+    fn test_queue_file_load_sends_none_preview_path() {
+        let (mut loader, load_rx, _result_tx) = test_loader();
+
+        let path = PathBuf::from("/photos/img001.jpg");
+        loader.queue_file_load(path.clone(), 1);
+
+        let req = load_rx.try_recv().unwrap();
+        assert_eq!(req.path, path);
+        assert!(req.preview_path.is_none());
+        assert!(!req.is_dir_preview);
+    }
+
+    #[test]
+    fn test_queue_dir_load_sends_explicit_path() {
+        let (mut loader, load_rx, _result_tx) = test_loader();
+
+        let cache_key = PathBuf::from("\0dir/42");
+        let preview_path = PathBuf::from("/tmp/dir_preview_42.jpg");
+        loader.queue_dir_load(cache_key.clone(), preview_path.clone(), 42);
+
+        let req = load_rx.try_recv().unwrap();
+        assert_eq!(req.path, cache_key);
+        assert_eq!(req.preview_path, Some(preview_path));
+        assert!(req.is_dir_preview);
     }
 
     #[test]
@@ -342,7 +421,7 @@ mod tests {
         let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1);
+        loader.queue_file_load(path.clone(), 1);
         assert!(loader.is_pending(&path));
 
         loader.set_current_dir(2);
@@ -354,7 +433,7 @@ mod tests {
         let (mut loader, _load_rx, result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1);
+        loader.queue_file_load(path.clone(), 1);
         assert!(loader.is_pending(&path));
 
         // Simulate the worker sending back a result
@@ -363,12 +442,34 @@ mod tests {
                 path: path.clone(),
                 image: None,
                 protocol: None,
+                is_dir_preview: false,
             })
             .unwrap();
 
         let results = loader.poll_results();
         assert_eq!(results.len(), 1);
         assert!(!loader.is_pending(&path));
+    }
+
+    #[test]
+    fn test_is_dir_preview_propagates_from_request_to_result() {
+        let (mut loader, _load_rx, result_tx) = test_loader();
+
+        let path = PathBuf::from("\0dir/42");
+        loader.queue_dir_load(path.clone(), PathBuf::from("/tmp/preview.jpg"), 42);
+
+        result_tx
+            .send(LoadResult {
+                path: path.clone(),
+                image: None,
+                protocol: None,
+                is_dir_preview: true,
+            })
+            .unwrap();
+
+        let results = loader.poll_results();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_dir_preview);
     }
 
     #[test]
@@ -391,11 +492,11 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_load_sends_to_channel() {
+    fn test_queue_file_load_sends_to_channel() {
         let (mut loader, load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1);
+        loader.queue_file_load(path.clone(), 1);
 
         // Should appear on load channel with current generation
         let req = load_rx.try_recv().unwrap();
@@ -427,7 +528,7 @@ mod tests {
         let (mut loader, _load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        loader.queue_load(path.clone(), path.clone(), false, 1);
+        loader.queue_file_load(path.clone(), 1);
         assert!(loader.is_pending(&path));
         assert_eq!(loader.pending_count(), 1);
 
@@ -442,13 +543,13 @@ mod tests {
         let (mut loader, load_rx, _result_tx) = test_loader();
 
         let path = PathBuf::from("/photos/img001.jpg");
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(loader.queue_file_load(path.clone(), 1));
         // Duplicate blocked
-        assert!(!loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(!loader.queue_file_load(path.clone(), 1));
 
         // Bump clears pending — same file can be re-queued with new generation
         loader.bump_load_generation();
-        assert!(loader.queue_load(path.clone(), path.clone(), false, 1));
+        assert!(loader.queue_file_load(path.clone(), 1));
 
         // First request has generation 0, second has generation 1
         let req1 = load_rx.try_recv().unwrap();
