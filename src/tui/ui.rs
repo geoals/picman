@@ -165,7 +165,7 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
         Style::default().fg(HELP_TEXT),
     )));
 
-    let width = 55;
+    let width = 60;
     let height = 11;
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
@@ -228,7 +228,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         key_line("Scroll wheel", "Move selection up/down", 13),
     ];
 
-    let help_width = 42;
+    let help_width = 60;
     let help_height = 27;
     let x = (area.width.saturating_sub(help_width)) / 2;
     let y = (area.height.saturating_sub(help_height)) / 2;

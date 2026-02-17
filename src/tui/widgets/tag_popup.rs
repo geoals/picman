@@ -8,7 +8,7 @@ use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT, TAG_COLOR};
 use crate::tui::state::TagInputState;
 
 pub fn render_tag_popup(frame: &mut Frame, area: Rect, tag_input: &TagInputState) {
-    let popup_width = 40;
+    let popup_width = 60;
     let popup_height = 12;
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
@@ -20,7 +20,7 @@ pub fn render_tag_popup(frame: &mut Frame, area: Rect, tag_input: &TagInputState
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Add Tag ")
+        .title(" Tags ")
         .title_style(
             Style::default()
                 .fg(HEADER_COLOR)
@@ -97,12 +97,17 @@ fn render_autocomplete(frame: &mut Frame, area: Rect, tag_input: &TagInputState)
         .iter()
         .enumerate()
         .map(|(idx, tag)| {
+            let prefix = if tag_input.is_applied(tag) {
+                " ✓ "
+            } else {
+                "   "
+            };
             let style = if show_highlight && idx == tag_input.selected_index {
                 Style::default().bg(FOCUS_COLOR).fg(Color::Black)
             } else {
                 Style::default().fg(TAG_COLOR)
             };
-            ListItem::new(format!("   {}", tag)).style(style)
+            ListItem::new(format!("{}{}", prefix, tag)).style(style)
         })
         .collect();
 
@@ -112,9 +117,9 @@ fn render_autocomplete(frame: &mut Frame, area: Rect, tag_input: &TagInputState)
 
 fn render_help(frame: &mut Frame, area: Rect, tag_input: &TagInputState) {
     let text = if tag_input.editing {
-        " Esc:Cancel  Enter:Add  ↑↓:Select"
+        " Esc:Cancel  Enter:Toggle  ↑↓:Select"
     } else {
-        " i:Edit  j/k:Nav  Enter:Select  Esc:Close"
+        " i:Edit  j/k:Nav  Enter:Toggle  Esc:Close"
     };
     let paragraph = Paragraph::new(text).style(Style::default().fg(HELP_TEXT));
     frame.render_widget(paragraph, area);

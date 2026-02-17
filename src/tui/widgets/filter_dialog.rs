@@ -8,7 +8,7 @@ use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT, RATING_COLOR, TAG
 use crate::tui::state::{FilterDialogFocus, FilterDialogState, RatingFilter};
 
 pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
-    let popup_width = 55;
+    let popup_width = 60;
     let popup_height = 20;
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;

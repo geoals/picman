@@ -397,7 +397,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
                         }
                     } else {
                         // Non-empty: apply selected match or create new tag
-                        state.apply_tag()?;
+                        state.toggle_tag()?;
                     }
                 }
                 KeyCode::Backspace => {
@@ -430,7 +430,7 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
                             input.editing = true;
                         }
                     } else {
-                        state.apply_tag()?;
+                        state.toggle_tag()?;
                     }
                 }
                 KeyCode::Char('i') if input_selected => {

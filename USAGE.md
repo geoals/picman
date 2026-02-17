@@ -68,18 +68,18 @@ Press `o` to open the operations menu for batch processing on the selected direc
 
 ### Tag Popup
 
-Press `t` to open the tag popup. It has two modes:
+Press `t` to open the tag popup. Tags already applied to the selected item are shown with a `✓` checkmark. The popup stays open after toggling, so you can add/remove multiple tags in one session.
 
 **Browse mode** (default):
-- `j` / `k` or `↑` / `↓` to navigate suggestions
-- `Enter` on a tag to apply it
+- `j` / `k` or `↑` / `↓` to navigate tags
+- `Enter` on a tag to toggle it (add if missing, remove if applied)
 - `i` or `Enter` on the input line to switch to edit mode
 - `Esc` to close
 
 **Edit mode** (type to filter/create):
 - Type to filter existing tags or create a new one
 - `↑` / `↓` to navigate filtered suggestions
-- `Enter` to apply selected/typed tag
+- `Enter` to toggle selected tag, or create and apply typed tag
 - `Backspace` on empty input exits edit mode
 - `Esc` to exit edit mode
 

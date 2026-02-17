@@ -295,10 +295,16 @@ pub struct TagInputState {
     pub input_selected: bool,
     /// True when actively typing in the input field
     pub editing: bool,
+    /// Tags currently applied to the selected item (for toggle display)
+    pub current_tags: Vec<String>,
 }
 
 impl TagInputState {
     pub fn new(all_tags: Vec<String>) -> Self {
+        Self::new_with_current(all_tags, Vec::new())
+    }
+
+    pub fn new_with_current(all_tags: Vec<String>, current_tags: Vec<String>) -> Self {
         let filtered_tags = all_tags.clone();
         Self {
             input: String::new(),
@@ -307,7 +313,13 @@ impl TagInputState {
             selected_index: 0,
             input_selected: true,
             editing: true,
+            current_tags,
         }
+    }
+
+    /// Check if a tag is currently applied to the selected item
+    pub fn is_applied(&self, tag: &str) -> bool {
+        self.current_tags.iter().any(|t| t == tag)
     }
 
     pub fn update_filter(&mut self) {
@@ -637,5 +649,28 @@ mod tests {
 
         state.move_up();
         assert!(state.input_selected); // Can't move into empty list
+    }
+
+    #[test]
+    fn test_tag_input_is_applied_returns_correct_values() {
+        let state = TagInputState::new_with_current(
+            vec!["outdoor".to_string(), "portrait".to_string(), "landscape".to_string()],
+            vec!["outdoor".to_string(), "portrait".to_string()],
+        );
+        assert!(state.is_applied("outdoor"));
+        assert!(state.is_applied("portrait"));
+        assert!(!state.is_applied("landscape"));
+        assert!(!state.is_applied("nonexistent"));
+    }
+
+    #[test]
+    fn test_tag_input_new_with_current_preserves_all_tags() {
+        let state = TagInputState::new_with_current(
+            vec!["a".to_string(), "b".to_string()],
+            vec!["a".to_string()],
+        );
+        assert_eq!(state.all_tags, vec!["a", "b"]);
+        assert_eq!(state.current_tags, vec!["a"]);
+        assert_eq!(state.filtered_tags, vec!["a", "b"]);
     }
 }
