@@ -5,7 +5,7 @@ use ratatui::{
 };
 
 use super::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT};
-use super::state::AppState;
+use super::state::{AppState, Focus};
 use super::widgets::{
     render_details_panel, render_directory_tree, render_file_list, render_filter_dialog,
     render_preview, render_rename_dialog, render_status_bar, render_tag_popup,
@@ -42,10 +42,14 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let tree_files_area = left_chunks[0];
     let details_area = left_chunks[1];
 
-    // Split tree+files area: tree | file list (keep ~43%/57% ratio)
+    // Split tree+files area: focused panel gets 70%
+    let (tree_pct, files_pct) = match state.focus {
+        Focus::DirectoryTree => (65, 35),
+        Focus::FileList => (35, 65),
+    };
     let tree_files_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(43), Constraint::Percentage(57)])
+        .constraints([Constraint::Percentage(tree_pct), Constraint::Percentage(files_pct)])
         .split(tree_files_area);
 
     let tree_area = tree_files_chunks[0];

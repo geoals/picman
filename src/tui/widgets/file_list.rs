@@ -4,7 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Row, Table},
 };
 
-use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT, RATING_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR};
+use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR};
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -32,39 +32,14 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 Cell::from(file.filename.as_str())
             };
 
-            // Format rating as stars with color
-            let rating_cell = if let Some(r) = file.rating {
-                let stars = "★".repeat(r as usize);
-                Cell::from(Span::styled(stars, Style::default().fg(RATING_COLOR)))
-            } else {
-                Cell::from(Span::styled("-", Style::default().fg(HELP_TEXT)))
-            };
-
-            // Format tags with color
-            let tags_cell = if file_with_tags.tags.is_empty() {
-                Cell::from("")
-            } else {
-                let mut spans: Vec<Span> = Vec::new();
-                for (i, tag) in file_with_tags.tags.iter().enumerate() {
-                    if i > 0 {
-                        spans.push(Span::raw(" "));
-                    }
-                    spans.push(Span::styled(
-                        format!("#{}", tag),
-                        Style::default().fg(TAG_COLOR),
-                    ));
-                }
-                Cell::from(Line::from(spans))
-            };
-
             // Format file size
             let size = format_size(file.size);
 
-            Row::new(vec![name_cell, rating_cell, tags_cell, Cell::from(size)])
+            Row::new(vec![name_cell, Cell::from(size)])
         })
         .collect();
 
-    let header = Row::new(vec!["Name", "Rating", "Tags", "Size"])
+    let header = Row::new(vec!["Name", "Size"])
         .style(
             Style::default()
                 .fg(HEADER_COLOR)
@@ -73,9 +48,7 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .bottom_margin(1);
 
     let widths = [
-        Constraint::Percentage(40),
-        Constraint::Length(8),
-        Constraint::Percentage(35),
+        Constraint::Min(0),
         Constraint::Length(10),
     ];
 
