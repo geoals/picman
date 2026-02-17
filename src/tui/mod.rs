@@ -2,6 +2,7 @@ mod app;
 pub mod colors;
 pub mod dialogs;
 mod mouse;
+pub mod preview_cache;
 pub mod preview_loader;
 pub mod state;
 mod ui;
