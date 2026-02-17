@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::tui::colors::{
-    format_rating, IMAGE_INDICATOR, RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR,
+    format_rating, HELP_TEXT, IMAGE_INDICATOR, RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR,
 };
 use crate::tui::state::{AppState, Focus};
 
@@ -75,7 +75,7 @@ fn render_file_details(state: &AppState) -> Text<'static> {
     // Line 4: tags with colors
     let mut line4_spans: Vec<Span> = vec![Span::raw("Tags: ")];
     if file_with_tags.tags.is_empty() {
-        line4_spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
+        line4_spans.push(Span::styled("none", Style::default().fg(HELP_TEXT)));
     } else {
         for (i, tag) in file_with_tags.tags.iter().enumerate() {
             if i > 0 {
@@ -136,7 +136,7 @@ fn render_directory_details(state: &AppState) -> Text<'static> {
     // Line 4: tags with colors
     let mut line4_spans: Vec<Span> = vec![Span::raw("Tags: ")];
     if tags.is_empty() {
-        line4_spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
+        line4_spans.push(Span::styled("none", Style::default().fg(HELP_TEXT)));
     } else {
         for (i, tag) in tags.iter().enumerate() {
             if i > 0 {

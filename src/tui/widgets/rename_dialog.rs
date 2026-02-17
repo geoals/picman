@@ -4,6 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT};
 use crate::tui::state::RenameDialogState;
 
 pub fn render_rename_dialog(frame: &mut Frame, area: Rect, dialog: &RenameDialogState) {
@@ -44,7 +45,7 @@ pub fn render_rename_dialog(frame: &mut Frame, area: Rect, dialog: &RenameDialog
     // Original path
     let dir_name = dialog.original_path.rsplit('/').next().unwrap_or(&dialog.original_path);
     let original = Paragraph::new(format!("Current: {}", dir_name))
-        .style(Style::default().fg(Color::Gray));
+        .style(Style::default().fg(HELP_TEXT));
     frame.render_widget(original, chunks[1]);
 
     // New name label
@@ -56,7 +57,7 @@ pub fn render_rename_dialog(frame: &mut Frame, area: Rect, dialog: &RenameDialog
 
     // Suggestions label
     let suggestions_label = Paragraph::new("Suggestions (Tab to use, Shift+Tab to append):")
-        .style(Style::default().fg(Color::Gray));
+        .style(Style::default().fg(HELP_TEXT));
     frame.render_widget(suggestions_label, chunks[6]);
 
     // Suggestions list
@@ -64,7 +65,7 @@ pub fn render_rename_dialog(frame: &mut Frame, area: Rect, dialog: &RenameDialog
 
     // Help text
     let help = Paragraph::new("Enter:Rename  Esc:Cancel  Up/Down:Select")
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(HELP_TEXT));
     frame.render_widget(help, chunks[8]);
 }
 
@@ -98,7 +99,7 @@ fn render_input_with_cursor(frame: &mut Frame, area: Rect, dialog: &RenameDialog
         Span::raw(after_cursor),
     ]);
 
-    let paragraph = Paragraph::new(line).style(Style::default().fg(Color::Yellow));
+    let paragraph = Paragraph::new(line).style(Style::default().fg(HEADER_COLOR));
     frame.render_widget(paragraph, area);
 }
 
@@ -114,7 +115,7 @@ fn render_suggestions(frame: &mut Frame, area: Rect, dialog: &RenameDialogState)
         .take(visible_count)
         .map(|(idx, word)| {
             let style = if idx == dialog.selected_suggestion {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
+                Style::default().bg(FOCUS_COLOR).fg(Color::Black)
             } else {
                 Style::default()
             };

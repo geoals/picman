@@ -1,6 +1,6 @@
 use ratatui::{layout::Rect, prelude::*, widgets::Paragraph};
 
-use crate::tui::colors::{RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
+use crate::tui::colors::{FOCUS_COLOR, HELP_TEXT, RATING_COLOR, SUCCESS_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR, WARNING_COLOR};
 use crate::tui::state::{AppState, Focus, RatingFilter};
 
 /// Spinner frames for indeterminate progress
@@ -33,7 +33,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         let spinner_idx = (elapsed.as_millis() / 80) as usize % SPINNER_FRAMES.len();
         spans.push(Span::styled(
             format!("{} ", SPINNER_FRAMES[spinner_idx]),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(FOCUS_COLOR),
         ));
 
         // Operation label
@@ -48,16 +48,16 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         };
         let empty = bar_width - filled;
 
-        spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled("[", Style::default().fg(UNFOCUS_COLOR)));
         spans.push(Span::styled(
             "█".repeat(filled),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(FOCUS_COLOR),
         ));
         spans.push(Span::styled(
             "░".repeat(empty),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(UNFOCUS_COLOR),
         ));
-        spans.push(Span::styled("] ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled("] ", Style::default().fg(UNFOCUS_COLOR)));
 
         // Count and percentage
         let pct = if total > 0 { completed * 100 / total } else { 0 };
@@ -66,7 +66,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         // Elapsed time
         spans.push(Span::styled(
             format_duration(elapsed_secs),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(WARNING_COLOR),
         ));
 
         // ETA (only show if we have meaningful progress)
@@ -76,7 +76,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             spans.push(Span::raw(" | ETA "));
             spans.push(Span::styled(
                 format_duration(remaining as u64),
-                Style::default().fg(Color::Green),
+                Style::default().fg(SUCCESS_COLOR),
             ));
         }
 
@@ -93,7 +93,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         // Cancel hint
         spans.push(Span::styled(
             " [Esc]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(HELP_TEXT),
         ));
 
         let line = Line::from(spans);
@@ -105,7 +105,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     // Show status message if present
     if let Some(ref msg) = state.status_message {
         let status = Paragraph::new(msg.as_str())
-            .style(Style::default().bg(Color::Green).fg(Color::Black));
+            .style(Style::default().bg(SUCCESS_COLOR).fg(Color::Black));
         frame.render_widget(status, area);
         return;
     }

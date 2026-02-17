@@ -4,7 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Row, Table},
 };
 
-use crate::tui::colors::{FOCUS_COLOR, RATING_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR};
+use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT, RATING_COLOR, TAG_COLOR, UNFOCUS_COLOR, VIDEO_INDICATOR};
 use crate::tui::state::{AppState, Focus};
 
 pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -37,7 +37,7 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 let stars = "★".repeat(r as usize);
                 Cell::from(Span::styled(stars, Style::default().fg(RATING_COLOR)))
             } else {
-                Cell::from(Span::styled("-", Style::default().fg(Color::DarkGray)))
+                Cell::from(Span::styled("-", Style::default().fg(HELP_TEXT)))
             };
 
             // Format tags with color
@@ -67,7 +67,7 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let header = Row::new(vec!["Name", "Rating", "Tags", "Size"])
         .style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(HEADER_COLOR)
                 .add_modifier(Modifier::BOLD),
         )
         .bottom_margin(1);
@@ -89,7 +89,7 @@ pub fn render_file_list(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let title = format!(" Files ({}) ", file_count);
 
     let highlight_style = if is_focused {
-        Style::default().bg(Color::Cyan).fg(Color::Black)
+        Style::default().bg(FOCUS_COLOR).fg(Color::Black)
     } else {
         Style::default().bg(Color::Gray).fg(Color::Black)
     };

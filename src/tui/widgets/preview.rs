@@ -13,6 +13,7 @@ use crate::thumbnails::{
     self, generate_dir_preview_from_paths, generate_video_thumbnail, get_cached_dir_preview,
     get_preview_path_for_file, is_image_file,
 };
+use crate::tui::colors::UNFOCUS_COLOR;
 use crate::tui::state::{AppState, DirectoryPreviewCache, Focus};
 
 // Global picker (created once, thread-safe)
@@ -161,7 +162,7 @@ pub fn generate_dir_preview(state: &AppState, dir: &Directory) -> Option<PathBuf
 fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(UNFOCUS_COLOR))
         .title(" Directory Preview ");
 
     // Get selected directory
@@ -248,7 +249,7 @@ fn render_directory_preview(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(UNFOCUS_COLOR))
         .title(" Preview ");
 
     // Get selected file path

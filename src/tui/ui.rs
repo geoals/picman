@@ -4,7 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::colors::{HEADER_COLOR, HELP_TEXT};
+use super::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT};
 use super::state::AppState;
 use super::widgets::{
     render_details_panel, render_directory_tree, render_file_list, render_filter_dialog,
@@ -101,9 +101,9 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled(" Directory: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Directory: ", Style::default().fg(HELP_TEXT)),
             Span::styled(dir_name, Style::default().fg(HEADER_COLOR)),
-            Span::styled(format!(" ({} files)", menu.file_count), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" ({} files)", menu.file_count), Style::default().fg(HELP_TEXT)),
         ]),
         Line::from(""),
     ];
@@ -112,19 +112,19 @@ fn render_operations_menu(frame: &mut Frame, area: Rect, menu: &super::state::Op
         let is_selected = i == menu.selected;
         if is_selected {
             lines.push(Line::from(vec![
-                Span::styled(" ▸ ", Style::default().fg(Color::Cyan)),
+                Span::styled(" ▸ ", Style::default().fg(FOCUS_COLOR)),
                 Span::styled(
                     format!("[{}] {}", key, name),
-                    Style::default().bg(Color::Cyan).fg(Color::Black),
+                    Style::default().bg(FOCUS_COLOR).fg(Color::Black),
                 ),
                 Span::styled(format!("  {}", desc), Style::default().fg(Color::White)),
             ]));
         } else {
             lines.push(Line::from(vec![
                 Span::raw("   "),
-                Span::styled(format!("[{}]", key), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("[{}]", key), Style::default().fg(FOCUS_COLOR)),
                 Span::styled(format!(" {}", name), Style::default().fg(Color::White)),
-                Span::styled(format!("  {}", desc), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  {}", desc), Style::default().fg(HELP_TEXT)),
             ]));
         }
     }

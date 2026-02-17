@@ -4,7 +4,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-use crate::tui::colors::{HEADER_COLOR, HELP_TEXT, RATING_COLOR, TAG_COLOR};
+use crate::tui::colors::{FOCUS_COLOR, HEADER_COLOR, HELP_TEXT, RATING_COLOR, TAG_COLOR, UNFOCUS_COLOR};
 use crate::tui::state::{FilterDialogFocus, FilterDialogState, RatingFilter};
 
 pub fn render_filter_dialog(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
@@ -58,9 +58,9 @@ fn render_rating_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogSta
     let is_focused = dialog.focus == FilterDialogFocus::Rating;
 
     let border_style = if is_focused {
-        Style::default().fg(RATING_COLOR)
+        Style::default().fg(FOCUS_COLOR)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(UNFOCUS_COLOR)
     };
 
     let block = Block::default()
@@ -75,7 +75,7 @@ fn render_rating_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogSta
     // Build rating line with star icons
     let sel = |selected: bool| {
         if selected {
-            Style::default().bg(Color::Cyan).fg(Color::Black)
+            Style::default().bg(FOCUS_COLOR).fg(Color::Black)
         } else {
             Style::default()
         }
@@ -95,7 +95,7 @@ fn render_rating_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogSta
     for i in 1..=5 {
         let stars = "★".repeat(i);
         let style = if dialog.rating_filter == RatingFilter::MinRating(i as i32) {
-            Style::default().bg(Color::Cyan).fg(Color::Black)
+            Style::default().bg(FOCUS_COLOR).fg(Color::Black)
         } else {
             Style::default().fg(RATING_COLOR)
         };
@@ -114,9 +114,9 @@ fn render_media_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogStat
     let is_focused = dialog.focus == FilterDialogFocus::VideoOnly;
 
     let border_style = if is_focused {
-        Style::default().fg(Color::Magenta)
+        Style::default().fg(FOCUS_COLOR)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(UNFOCUS_COLOR)
     };
 
     let block = Block::default()
@@ -130,7 +130,7 @@ fn render_media_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogStat
 
     let checkbox = if dialog.video_only { "[x]" } else { "[ ]" };
     let style = if is_focused {
-        Style::default().fg(Color::Magenta)
+        Style::default().fg(FOCUS_COLOR)
     } else {
         Style::default()
     };
@@ -144,9 +144,9 @@ fn render_tags_section(frame: &mut Frame, area: Rect, dialog: &FilterDialogState
     let is_focused = dialog.focus == FilterDialogFocus::Tag;
 
     let border_style = if is_focused {
-        Style::default().fg(TAG_COLOR)
+        Style::default().fg(FOCUS_COLOR)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(UNFOCUS_COLOR)
     };
 
     let block = Block::default()
@@ -182,7 +182,7 @@ fn render_selected_tags(frame: &mut Frame, area: Rect, dialog: &FilterDialogStat
     let mut spans: Vec<Span> = vec![Span::raw(" Active: ")];
 
     if dialog.selected_tags.is_empty() {
-        spans.push(Span::styled("(none)", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled("(none)", Style::default().fg(HELP_TEXT)));
     } else {
         for (i, tag) in dialog.selected_tags.iter().enumerate() {
             if i > 0 {
@@ -202,19 +202,61 @@ fn render_selected_tags(frame: &mut Frame, area: Rect, dialog: &FilterDialogStat
 
 fn render_tag_input(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
     let is_focused = dialog.focus == FilterDialogFocus::Tag;
-    let style = if is_focused {
-        Style::default().fg(TAG_COLOR)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
 
-    let input_text = format!(" Add: > {}", dialog.tag_input);
-    let paragraph = Paragraph::new(input_text).style(style);
-    frame.render_widget(paragraph, area);
+    let has_input = !dialog.tag_input.is_empty();
+
+    if is_focused && dialog.tag_editing {
+        // Actively editing: show input with cursor
+        let input_text = format!(" > {}_", dialog.tag_input);
+        let style = Style::default().fg(FOCUS_COLOR);
+        let paragraph = Paragraph::new(input_text).style(style);
+        frame.render_widget(paragraph, area);
+    } else if is_focused && dialog.tag_input_selected && has_input {
+        // Input line selected with preserved search text
+        let line = Line::from(vec![
+            Span::styled(
+                format!(" > {}", dialog.tag_input),
+                Style::default().bg(FOCUS_COLOR).fg(Color::Black),
+            ),
+            Span::styled("  i/Enter to edit", Style::default().fg(HELP_TEXT)),
+        ]);
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+    } else if is_focused && dialog.tag_input_selected {
+        // Input line selected, empty: show hint
+        let line = Line::from(vec![
+            Span::styled(" i", Style::default().bg(FOCUS_COLOR).fg(Color::Black)),
+            Span::styled("/", Style::default().fg(HELP_TEXT)),
+            Span::styled("Enter", Style::default().bg(FOCUS_COLOR).fg(Color::Black)),
+            Span::styled(" to search tags", Style::default().fg(HELP_TEXT)),
+        ]);
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+    } else if is_focused && has_input {
+        // Tag in list is selected, but search text is still filtering
+        let line = Line::from(Span::styled(
+            format!(" > {}", dialog.tag_input),
+            Style::default().fg(HELP_TEXT),
+        ));
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+    } else if is_focused {
+        // Tag in list is selected, no search text
+        let line = Line::from(Span::styled(
+            " Search tags...",
+            Style::default().fg(HELP_TEXT),
+        ));
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+    } else {
+        let paragraph = Paragraph::new("").style(Style::default().fg(HELP_TEXT));
+        frame.render_widget(paragraph, area);
+    }
 }
 
 fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialogState) {
     let is_tag_focused = dialog.focus == FilterDialogFocus::Tag;
+    let show_highlight = is_tag_focused && (!dialog.tag_input_selected || dialog.tag_editing);
     let visible_height = area.height as usize;
 
     let total_tags = dialog.filtered_tags.len();
@@ -227,8 +269,8 @@ fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialog
         .skip(scroll_offset)
         .take(visible_height)
         .map(|(idx, tag)| {
-            let style = if is_tag_focused && idx == dialog.tag_list_index {
-                Style::default().bg(Color::Cyan).fg(Color::Black)
+            let style = if show_highlight && idx == dialog.tag_list_index {
+                Style::default().bg(FOCUS_COLOR).fg(Color::Black)
             } else {
                 Style::default().fg(TAG_COLOR)
             };
@@ -255,7 +297,7 @@ fn render_autocomplete_list(frame: &mut Frame, area: Rect, dialog: &FilterDialog
 }
 
 fn render_help_text(frame: &mut Frame, area: Rect) {
-    let help = " Arrows:Navigate  0:Clear  m/Esc:Close";
+    let help = " hjkl/Arrows:Navigate  0:Clear  m/Esc:Close";
     let paragraph = Paragraph::new(help).style(Style::default().fg(HELP_TEXT));
     frame.render_widget(paragraph, area);
 }

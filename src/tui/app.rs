@@ -192,9 +192,27 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         let focus = state.filter_dialog_focus();
 
         match code {
-            KeyCode::Esc | KeyCode::Char('m') => {
-                // Apply filter when closing
-                state.apply_filter()?;
+            KeyCode::Esc => {
+                let tag_editing = focus == Some(FilterDialogFocus::Tag)
+                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
+                if tag_editing {
+                    // Exit tag editing mode — keep input text so user can
+                    // navigate the filtered list with j/k
+                    if let Some(ref mut dialog) = state.filter_dialog {
+                        dialog.tag_editing = false;
+                    }
+                } else {
+                    state.apply_filter()?;
+                }
+            }
+            KeyCode::Char('m') => {
+                let tag_editing = focus == Some(FilterDialogFocus::Tag)
+                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
+                if tag_editing {
+                    state.filter_dialog_char('m');
+                } else {
+                    state.apply_filter()?;
+                }
             }
             KeyCode::Tab => state.filter_dialog_focus_down(),
             KeyCode::BackTab => state.filter_dialog_focus_up(),
@@ -227,23 +245,96 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
                         state.auto_apply_filter()?;
                     }
                     Some(FilterDialogFocus::Tag) => {
-                        state.filter_dialog_add_tag();
-                        state.auto_apply_filter()?;
+                        let editing = state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
+                        let on_input = state.filter_dialog.as_ref().is_some_and(|d| d.tag_input_selected);
+                        if editing {
+                            let has_match = state.filter_dialog.as_ref()
+                                .is_some_and(|d| !d.filtered_tags.is_empty());
+                            if has_match {
+                                // Add the highlighted autocomplete match
+                                state.filter_dialog_add_tag();
+                                state.auto_apply_filter()?;
+                            } else {
+                                // No matches (or empty input): exit editing mode
+                                if let Some(ref mut dialog) = state.filter_dialog {
+                                    dialog.tag_editing = false;
+                                }
+                            }
+                        } else if on_input {
+                            // On input line: Enter starts editing mode
+                            if let Some(ref mut dialog) = state.filter_dialog {
+                                dialog.tag_editing = true;
+                            }
+                        } else {
+                            // On a tag in the list: Enter adds that tag
+                            state.filter_dialog_add_tag();
+                            state.auto_apply_filter()?;
+                        }
                     }
                     _ => {}
                 }
             }
             KeyCode::Backspace => {
-                state.filter_dialog_backspace();
-                state.auto_apply_filter()?;
+                let tag_editing = focus == Some(FilterDialogFocus::Tag)
+                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
+                if tag_editing {
+                    // Check if input is empty — if so, exit editing mode
+                    let input_empty = state.filter_dialog.as_ref().is_some_and(|d| d.tag_input.is_empty());
+                    if input_empty {
+                        if let Some(ref mut dialog) = state.filter_dialog {
+                            dialog.tag_editing = false;
+                        }
+                    } else {
+                        state.filter_dialog_backspace();
+                        state.auto_apply_filter()?;
+                    }
+                } else {
+                    // Not editing tags: backspace removes last selected tag
+                    state.filter_dialog_backspace();
+                    state.auto_apply_filter()?;
+                }
             }
             KeyCode::Char(c) => {
-                // When in Tag focus, all chars go to tag input
-                if focus == Some(FilterDialogFocus::Tag) {
+                // When editing tag input, all chars go to tag input
+                let tag_editing = focus == Some(FilterDialogFocus::Tag)
+                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
+                if tag_editing {
                     state.filter_dialog_char(c);
                 } else {
-                    // Rating shortcuts only when not in Tag focus
+                    // Navigation and shortcuts when not editing tags
                     match c {
+                        'i' => {
+                            // Enter editing mode on the tag input line
+                            let on_input = focus == Some(FilterDialogFocus::Tag)
+                                && state.filter_dialog.as_ref().is_some_and(|d| d.tag_input_selected);
+                            if on_input {
+                                if let Some(ref mut dialog) = state.filter_dialog {
+                                    dialog.tag_editing = true;
+                                }
+                            }
+                        }
+                        'j' => {
+                            if focus == Some(FilterDialogFocus::Tag) {
+                                state.filter_dialog_down();
+                            } else {
+                                state.filter_dialog_focus_down();
+                            }
+                        }
+                        'k' => {
+                            if focus == Some(FilterDialogFocus::Tag) {
+                                state.filter_dialog_up();
+                            } else {
+                                state.filter_dialog_focus_up();
+                            }
+                        }
+                        'h' => {
+                            state.filter_dialog_left();
+                            state.auto_apply_filter()?;
+                        }
+                        'l' => {
+                            state.filter_dialog_right();
+                            state.auto_apply_filter()?;
+                        }
                         '0' => state.clear_filter()?,
                         '1' | 'a' => {
                             state.filter_dialog_set_rating(1);
@@ -284,14 +375,71 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
 
     // Handle tag input popup if active
     if state.tag_input.is_some() {
-        match code {
-            KeyCode::Esc => state.close_tag_input(),
-            KeyCode::Enter => state.apply_tag()?,
-            KeyCode::Backspace => state.tag_input_backspace(),
-            KeyCode::Up => state.tag_input_up(),
-            KeyCode::Down => state.tag_input_down(),
-            KeyCode::Char(c) => state.tag_input_char(c),
-            _ => {}
+        let editing = state.tag_input.as_ref().is_some_and(|t| t.editing);
+        let input_selected = state.tag_input.as_ref().is_some_and(|t| t.input_selected);
+
+        if editing {
+            match code {
+                KeyCode::Esc => {
+                    if let Some(ref mut input) = state.tag_input {
+                        input.editing = false;
+                    }
+                }
+                KeyCode::Enter => {
+                    let input_empty = state
+                        .tag_input
+                        .as_ref()
+                        .is_some_and(|t| t.input.is_empty());
+                    if input_empty {
+                        // Empty input: exit editing mode
+                        if let Some(ref mut input) = state.tag_input {
+                            input.editing = false;
+                        }
+                    } else {
+                        // Non-empty: apply selected match or create new tag
+                        state.apply_tag()?;
+                    }
+                }
+                KeyCode::Backspace => {
+                    let input_empty = state
+                        .tag_input
+                        .as_ref()
+                        .is_some_and(|t| t.input.is_empty());
+                    if input_empty {
+                        if let Some(ref mut input) = state.tag_input {
+                            input.editing = false;
+                        }
+                    } else {
+                        state.tag_input_backspace();
+                    }
+                }
+                KeyCode::Up => state.tag_input_up(),
+                KeyCode::Down => state.tag_input_down(),
+                KeyCode::Char(c) => state.tag_input_char(c),
+                _ => {}
+            }
+        } else {
+            // Browse mode: vim-style navigation
+            match code {
+                KeyCode::Esc => state.close_tag_input(),
+                KeyCode::Char('j') | KeyCode::Down => state.tag_input_down(),
+                KeyCode::Char('k') | KeyCode::Up => state.tag_input_up(),
+                KeyCode::Enter => {
+                    if input_selected {
+                        if let Some(ref mut input) = state.tag_input {
+                            input.editing = true;
+                        }
+                    } else {
+                        state.apply_tag()?;
+                    }
+                }
+                KeyCode::Char('i') if input_selected => {
+                    if let Some(ref mut input) = state.tag_input {
+                        input.editing = true;
+                    }
+                }
+                _ => {}
+            }
         }
         return Ok(KeyAction::Continue);
     }

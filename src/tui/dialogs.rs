@@ -173,6 +173,8 @@ pub struct FilterDialogState {
     pub tag_scroll_offset: usize,      // Scroll offset for tag list
     pub focus: FilterDialogFocus,
     pub video_only: bool,              // Filter to show only videos
+    pub tag_input_selected: bool,      // True when the input line is the selected item
+    pub tag_editing: bool,             // True when actively typing in tag input
 }
 
 impl FilterDialogState {
@@ -188,6 +190,8 @@ impl FilterDialogState {
             tag_scroll_offset: 0,
             focus: FilterDialogFocus::Rating,
             video_only: current_filter.video_only,
+            tag_input_selected: true,
+            tag_editing: false,
         }
     }
 
@@ -202,6 +206,7 @@ impl FilterDialogState {
             })
             .cloned()
             .collect();
+        sort_prefix_first(&mut self.filtered_tags, &query);
         self.tag_list_index = 0;
         self.tag_scroll_offset = 0;
     }
@@ -210,27 +215,38 @@ impl FilterDialogState {
         self.filtered_tags.get(self.tag_list_index)
     }
 
-    /// Move up in tag list. Returns true if moved, false if already at top.
+    /// Move up in tag section. Navigates: tag list → input line → leave section.
+    /// Returns true if moved within section, false if at top (should leave section).
     pub fn move_tag_list_up(&mut self) -> bool {
-        if !self.filtered_tags.is_empty() && self.tag_list_index > 0 {
+        if self.tag_input_selected {
+            // Already at input line (top of section), signal to leave
+            false
+        } else if self.tag_list_index > 0 {
             self.tag_list_index -= 1;
-            // Ensure selection is visible (scroll up if needed)
             if self.tag_list_index < self.tag_scroll_offset {
                 self.tag_scroll_offset = self.tag_list_index;
             }
             true
         } else {
-            false
+            // At first tag, move up to input line
+            self.tag_input_selected = true;
+            true
         }
     }
 
-    /// Move down in tag list. Returns true if moved, false if already at bottom.
+    /// Move down in tag section. Navigates: input line → tag list.
+    /// Returns true if moved, false if already at bottom.
     pub fn move_tag_list_down(&mut self) -> bool {
-        if !self.filtered_tags.is_empty()
+        if self.tag_input_selected {
+            // Move from input line to first tag
+            self.tag_input_selected = false;
+            self.tag_list_index = 0;
+            self.tag_scroll_offset = 0;
+            true
+        } else if !self.filtered_tags.is_empty()
             && self.tag_list_index < self.filtered_tags.len() - 1
         {
             self.tag_list_index += 1;
-            // Scroll down if selection goes below visible area (assume ~5 visible items)
             let visible_height = 5;
             if self.tag_list_index >= self.tag_scroll_offset + visible_height {
                 self.tag_scroll_offset = self.tag_list_index - visible_height + 1;
@@ -263,12 +279,22 @@ impl FilterDialogState {
     }
 }
 
+/// Sort tags so prefix matches come before substring-only matches.
+/// Preserves alphabetical order within each group.
+fn sort_prefix_first(tags: &mut [String], query: &str) {
+    tags.sort_by_key(|tag| !tag.to_lowercase().starts_with(query));
+}
+
 /// State for the tag input popup
 pub struct TagInputState {
     pub input: String,
     pub all_tags: Vec<String>,
     pub filtered_tags: Vec<String>,
     pub selected_index: usize,
+    /// True when the input line is the selected navigable item
+    pub input_selected: bool,
+    /// True when actively typing in the input field
+    pub editing: bool,
 }
 
 impl TagInputState {
@@ -279,6 +305,8 @@ impl TagInputState {
             all_tags,
             filtered_tags,
             selected_index: 0,
+            input_selected: true,
+            editing: true,
         }
     }
 
@@ -290,6 +318,7 @@ impl TagInputState {
             .filter(|tag| tag.to_lowercase().contains(&query))
             .cloned()
             .collect();
+        sort_prefix_first(&mut self.filtered_tags, &query);
         self.selected_index = 0;
     }
 
@@ -298,22 +327,50 @@ impl TagInputState {
     }
 
     pub fn move_up(&mut self) {
-        if !self.filtered_tags.is_empty() {
-            if self.selected_index > 0 {
-                self.selected_index -= 1;
-            } else {
-                self.selected_index = self.filtered_tags.len() - 1; // Wrap to bottom
+        if self.editing {
+            // Editing mode: navigate autocomplete list only (wrap within list)
+            if !self.filtered_tags.is_empty() {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                } else {
+                    self.selected_index = self.filtered_tags.len() - 1;
+                }
             }
+        } else if self.input_selected {
+            // Browse mode at input line: wrap to bottom of list
+            if !self.filtered_tags.is_empty() {
+                self.input_selected = false;
+                self.selected_index = self.filtered_tags.len() - 1;
+            }
+        } else if self.selected_index > 0 {
+            self.selected_index -= 1;
+        } else {
+            // At first tag: move up to input line
+            self.input_selected = true;
         }
     }
 
     pub fn move_down(&mut self) {
-        if !self.filtered_tags.is_empty() {
-            if self.selected_index < self.filtered_tags.len() - 1 {
-                self.selected_index += 1;
-            } else {
-                self.selected_index = 0; // Wrap to top
+        if self.editing {
+            // Editing mode: navigate autocomplete list only (wrap within list)
+            if !self.filtered_tags.is_empty() {
+                if self.selected_index < self.filtered_tags.len() - 1 {
+                    self.selected_index += 1;
+                } else {
+                    self.selected_index = 0;
+                }
             }
+        } else if self.input_selected {
+            // Browse mode at input line: move to first tag
+            if !self.filtered_tags.is_empty() {
+                self.input_selected = false;
+                self.selected_index = 0;
+            }
+        } else if self.selected_index < self.filtered_tags.len() - 1 {
+            self.selected_index += 1;
+        } else {
+            // At last tag: wrap to input line
+            self.input_selected = true;
         }
     }
 }
@@ -483,14 +540,102 @@ mod tests {
     }
 
     #[test]
-    fn test_tag_input_navigation_wraps() {
+    fn test_tag_input_filter_prefers_prefix_matches() {
+        let mut state = TagInputState::new(vec![
+            "landscape".to_string(),
+            "screenshot".to_string(),
+        ]);
+        state.input = "sc".to_string();
+        state.update_filter();
+        // "screenshot" starts with "sc", "landscape" only contains it
+        assert_eq!(state.filtered_tags, vec!["screenshot", "landscape"]);
+    }
+
+    #[test]
+    fn test_filter_dialog_prefers_prefix_matches() {
+        let all_tags = vec![
+            "landscape".to_string(),
+            "screenshot".to_string(),
+        ];
+        let mut dialog = FilterDialogState::new(all_tags, &FilterCriteria::default());
+        dialog.tag_input = "sc".to_string();
+        dialog.update_tag_filter();
+        assert_eq!(dialog.filtered_tags, vec!["screenshot", "landscape"]);
+    }
+
+    #[test]
+    fn test_tag_input_editing_navigation_wraps_within_list() {
         let mut state = TagInputState::new(vec!["a".to_string(), "b".to_string()]);
+        assert!(state.editing);
         assert_eq!(state.selected_index, 0);
 
         state.move_up();
-        assert_eq!(state.selected_index, 1); // Wraps to bottom
+        assert_eq!(state.selected_index, 1); // Wraps to bottom within list
 
         state.move_down();
-        assert_eq!(state.selected_index, 0); // Wraps to top
+        assert_eq!(state.selected_index, 0); // Wraps to top within list
+    }
+
+    #[test]
+    fn test_tag_input_starts_in_editing_mode() {
+        let state = TagInputState::new(vec!["a".to_string()]);
+        assert!(state.editing);
+        assert!(state.input_selected);
+    }
+
+    #[test]
+    fn test_tag_input_browse_down_cycles_through_input_and_list() {
+        let mut state = TagInputState::new(vec!["a".to_string(), "b".to_string()]);
+        state.editing = false;
+        assert!(state.input_selected);
+
+        // Input → first tag
+        state.move_down();
+        assert!(!state.input_selected);
+        assert_eq!(state.selected_index, 0);
+
+        // First tag → second tag
+        state.move_down();
+        assert!(!state.input_selected);
+        assert_eq!(state.selected_index, 1);
+
+        // Last tag → wraps to input
+        state.move_down();
+        assert!(state.input_selected);
+    }
+
+    #[test]
+    fn test_tag_input_browse_up_wraps_from_input_to_bottom() {
+        let mut state = TagInputState::new(vec!["a".to_string(), "b".to_string()]);
+        state.editing = false;
+        assert!(state.input_selected);
+
+        state.move_up();
+        assert!(!state.input_selected);
+        assert_eq!(state.selected_index, 1); // Wrapped to last tag
+    }
+
+    #[test]
+    fn test_tag_input_browse_up_from_first_tag_goes_to_input() {
+        let mut state = TagInputState::new(vec!["a".to_string(), "b".to_string()]);
+        state.editing = false;
+        state.input_selected = false;
+        state.selected_index = 0;
+
+        state.move_up();
+        assert!(state.input_selected);
+    }
+
+    #[test]
+    fn test_tag_input_browse_empty_list_stays_at_input() {
+        let mut state = TagInputState::new(vec![]);
+        state.editing = false;
+        assert!(state.input_selected);
+
+        state.move_down();
+        assert!(state.input_selected); // Can't move into empty list
+
+        state.move_up();
+        assert!(state.input_selected); // Can't move into empty list
     }
 }

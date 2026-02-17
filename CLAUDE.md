@@ -55,6 +55,26 @@ Operations in the TUI run sequentially via `operation_queue`:
 - Cancelling (Esc) clears the entire queue
 - Queue ensures predictable resource usage and avoids thrashing
 
+### TUI Colors
+
+Use semantic color constants from `src/tui/colors.rs` instead of hardcoded `Color::` values:
+
+- `FOCUS_COLOR` — selected/active item highlight (borders, highlight bg, spinner, progress bar fill)
+- `UNFOCUS_COLOR` — unfocused borders, progress bar brackets
+- `HEADER_COLOR` — section titles, table headers
+- `HELP_TEXT` — help text, placeholders, secondary/disabled text ("none", "-")
+- `RATING_COLOR` — star ratings
+- `TAG_COLOR` — tag names (`#tag`)
+- `VIDEO_INDICATOR` — video type markers
+- `IMAGE_INDICATOR` — image type markers
+- `SUCCESS_COLOR` — success status, ETA display
+- `WARNING_COLOR` — warning status, elapsed time
+
+Exceptions (OK to hardcode):
+- `Color::Black` as foreground on colored backgrounds
+- `Color::White` / `Color::Gray` for structural UI elements (status bar bg, unfocused row highlight bg)
+- One-off unique colors used only once (e.g., `Color::Red` for error text)
+
 ### CLI Commands
 
 - All batch CLI commands (sync, thumbnails, previews) should:

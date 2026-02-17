@@ -61,7 +61,7 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState
     };
 
     let highlight_style = if is_focused {
-        Style::default().bg(Color::Cyan).fg(Color::Black)
+        Style::default().bg(FOCUS_COLOR).fg(Color::Black)
     } else {
         Style::default().bg(Color::Gray).fg(Color::Black)
     };

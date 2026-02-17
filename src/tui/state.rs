@@ -947,22 +947,32 @@ impl AppState {
     /// Move focus down in filter dialog
     pub fn filter_dialog_focus_down(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
+            dialog.tag_editing = false;
             dialog.focus = match dialog.focus {
                 FilterDialogFocus::Rating => FilterDialogFocus::VideoOnly,
                 FilterDialogFocus::VideoOnly => FilterDialogFocus::Tag,
                 FilterDialogFocus::Tag => FilterDialogFocus::Rating,
             };
+            // Enter tag section at the input line (top)
+            if dialog.focus == FilterDialogFocus::Tag {
+                dialog.tag_input_selected = true;
+            }
         }
     }
 
     /// Move focus up in filter dialog
     pub fn filter_dialog_focus_up(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
+            dialog.tag_editing = false;
             dialog.focus = match dialog.focus {
                 FilterDialogFocus::Rating => FilterDialogFocus::Tag,
                 FilterDialogFocus::VideoOnly => FilterDialogFocus::Rating,
                 FilterDialogFocus::Tag => FilterDialogFocus::VideoOnly,
             };
+            // Enter tag section at the input line (top)
+            if dialog.focus == FilterDialogFocus::Tag {
+                dialog.tag_input_selected = true;
+            }
         }
     }
 
@@ -996,27 +1006,18 @@ impl AppState {
         }
     }
 
-    /// Add selected tag to filter
+    /// Add the highlighted tag from the autocomplete list to the filter
     pub fn filter_dialog_add_tag(&mut self) {
         if let Some(ref mut dialog) = self.filter_dialog {
-            if dialog.focus == FilterDialogFocus::Tag {
-                // Add selected tag from autocomplete, or input text
-                let tag_to_add = dialog
-                    .selected_autocomplete_tag()
-                    .cloned()
-                    .or_else(|| {
-                        let input = dialog.tag_input.trim().to_string();
-                        if input.is_empty() { None } else { Some(input) }
-                    });
-
-                if let Some(tag) = tag_to_add {
-                    if !dialog.selected_tags.contains(&tag) {
-                        dialog.selected_tags.push(tag);
-                        dialog.selected_tags.sort();
-                    }
-                    dialog.tag_input.clear();
-                    dialog.update_tag_filter();
+            if let Some(tag) = dialog.selected_autocomplete_tag().cloned() {
+                if !dialog.selected_tags.contains(&tag) {
+                    dialog.selected_tags.push(tag);
+                    dialog.selected_tags.sort();
                 }
+                dialog.tag_input.clear();
+                dialog.tag_editing = false;
+                dialog.tag_input_selected = true;
+                dialog.update_tag_filter();
             }
         }
     }
