@@ -109,9 +109,36 @@ function getRecursiveFileCount(dirId) {
     return count;
 }
 
+function getTotalFileCount() {
+    return state.directories.reduce((sum, d) => sum + (d.file_count || 0), 0);
+}
+
 function renderDirectoryTree() {
     const container = document.getElementById("directory-tree");
     container.innerHTML = "";
+
+    // Virtual root entry — shows all files in library
+    const rootEl = document.createElement("div");
+    rootEl.className = "dir-item" + (state.selectedDirId === "root" ? " selected" : "");
+    rootEl.style.paddingLeft = "8px";
+
+    const rootToggle = document.createElement("span");
+    rootToggle.className = "dir-toggle";
+
+    const rootName = document.createElement("span");
+    rootName.className = "dir-name";
+    rootName.textContent = "Root";
+
+    const rootCount = document.createElement("span");
+    rootCount.className = "dir-count";
+    const totalFiles = getTotalFileCount();
+    if (totalFiles > 0) rootCount.textContent = totalFiles;
+
+    rootEl.appendChild(rootToggle);
+    rootEl.appendChild(rootName);
+    rootEl.appendChild(rootCount);
+    rootEl.addEventListener("click", () => selectDirectory("root"));
+    container.appendChild(rootEl);
 
     const roots = getRootDirectories();
     for (const dir of roots) {
@@ -175,12 +202,12 @@ function dirDisplayName(dir) {
 function selectDirectory(dirId, { recursive = true } = {}) {
     state.selectedDirId = dirId;
     state.recursive = recursive;
-    state.useFilteredEndpoint = false;
+    state.useFilteredEndpoint = dirId === "root";
     state.currentPage = 1;
     state.currentFiles = [];
 
-    // Auto-expand when selecting
-    if (hasChildren(dirId) && !state.expandedDirs.has(dirId)) {
+    // Auto-expand when selecting a real directory
+    if (dirId !== "root" && hasChildren(dirId) && !state.expandedDirs.has(dirId)) {
         state.expandedDirs.add(dirId);
     }
 
@@ -206,6 +233,14 @@ function toggleExpand(dirId) {
 function renderBreadcrumb() {
     const container = document.getElementById("breadcrumb");
     container.innerHTML = "";
+
+    if (state.selectedDirId === "root") {
+        const label = document.createElement("span");
+        label.className = "current";
+        label.textContent = "Root";
+        container.appendChild(label);
+        return;
+    }
 
     if (state.useFilteredEndpoint) {
         const label = document.createElement("span");
@@ -427,12 +462,9 @@ function applyFilters() {
         renderDirectoryTree();
     } else {
         state.useFilteredEndpoint = false;
-        // If no filters and no directory, show nothing
+        // If no filters and no directory selected, go back to root
         if (state.selectedDirId === null) {
-            const grid = document.getElementById("grid");
-            grid.innerHTML = '<div class="empty-state">Select a directory or apply filters</div>';
-            renderFileCount();
-            renderBreadcrumb();
+            selectDirectory("root");
             renderTagChips();
             return;
         }
@@ -605,14 +637,7 @@ async function init() {
         setupLightbox();
         initZoom();
 
-        // Auto-select first root if there's only one
-        const roots = getRootDirectories();
-        if (roots.length === 1) {
-            selectDirectory(roots[0].id);
-        } else {
-            document.getElementById("grid").innerHTML =
-                '<div class="empty-state">Select a directory to browse photos</div>';
-        }
+        selectDirectory("root");
     } catch (err) {
         console.error("Failed to initialize:", err);
         document.getElementById("grid").innerHTML =
