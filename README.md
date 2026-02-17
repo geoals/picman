@@ -56,12 +56,12 @@ picman thumbnails /path/to/photos
 |-----|--------|
 | `j/k` or `↓/↑` | Move down/up |
 | `h/l` or `←/→` | Collapse/expand or switch panes |
-| `1-5` | Set rating |
+| `1-5` / `a-g` | Set rating |
 | `t` | Add tag |
 | `m` | Filter by rating/tags |
 | `o` | Operations menu |
 | `?` | Help |
-| `q` | Quit |
+| `q` | Quit (or cancel operation) |
 
 ## Documentation
 
@@ -73,13 +73,39 @@ picman thumbnails /path/to/photos
 ```
 picman/
 ├── src/
-│   ├── cli/        # CLI command implementations
-│   ├── db/         # SQLite schema and queries
-│   ├── tui/        # Terminal UI (ratatui)
-│   │   └── widgets/  # Reusable UI components
-│   ├── scanner.rs  # Filesystem traversal
-│   └── hash.rs     # xxHash3-64 implementation
-└── .picman.db      # SQLite database (created per library)
+│   ├── cli/            # CLI command implementations
+│   │   ├── init.rs         # Library initialization
+│   │   ├── sync.rs         # Filesystem sync
+│   │   ├── list.rs         # File listing with filters
+│   │   ├── rate.rs         # Rating management
+│   │   ├── tag.rs          # Tag management
+│   │   ├── thumbnails.rs   # Thumbnail generation
+│   │   ├── previews.rs     # Directory preview generation
+│   │   ├── status.rs       # Library health report
+│   │   └── repair.rs       # Database repair
+│   ├── db/             # SQLite schema and queries
+│   │   ├── schema.rs       # Table definitions and migrations
+│   │   ├── directories.rs  # Directory queries
+│   │   ├── files.rs        # File queries
+│   │   ├── tags.rs         # Tag queries (with batch fetching)
+│   │   └── filters.rs      # Filter/search queries
+│   ├── tui/            # Terminal UI (ratatui)
+│   │   ├── app.rs          # Event loop and key handling
+│   │   ├── state.rs        # Application state
+│   │   ├── ui.rs           # Layout and rendering
+│   │   ├── colors.rs       # Semantic color constants
+│   │   ├── dialogs.rs      # Dialog state types
+│   │   ├── operations.rs   # Background batch operations
+│   │   ├── preview_cache.rs # LRU preview cache
+│   │   ├── preview_loader.rs # Background image loading
+│   │   ├── mouse.rs        # Mouse event handling
+│   │   └── widgets/        # Reusable UI components
+│   ├── scanner.rs      # Filesystem traversal
+│   ├── hash.rs         # xxHash3-64 implementation
+│   ├── thumbnails.rs   # Thumbnail/preview generation
+│   ├── suggestions.rs  # Word suggestions for rename
+│   └── logging.rs      # Tracing infrastructure
+└── .picman.db          # SQLite database (created per library)
 ```
 
 ## Technology

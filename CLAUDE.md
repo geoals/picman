@@ -41,7 +41,7 @@ Background operations in the TUI must provide rich feedback:
 - **Elapsed time** - show how long the operation has been running
 - **ETA** - calculate and display estimated time remaining based on current rate
 - **Queue count** - show number of pending operations if any
-- **Cancel hint** - remind users they can cancel with Esc
+- **Cancel hint** - remind users they can cancel with `q`
 
 Use `BackgroundProgress` struct with `AtomicUsize` counters for thread-safe progress updates. The status bar renders at ~60fps so the spinner animates smoothly.
 
@@ -52,7 +52,7 @@ Operations in the TUI run sequentially via `operation_queue`:
 - Only one background operation runs at a time
 - Additional operations are queued and run in order
 - Status bar shows "+N queued" when operations are waiting
-- Cancelling (Esc) clears the entire queue
+- Cancelling (`q`) clears the entire queue
 - Queue ensures predictable resource usage and avoids thrashing
 
 ### TUI Colors
@@ -82,3 +82,11 @@ Exceptions (OK to hardcode):
   - Use parallel processing where beneficial
   - Support incremental execution (skip already-processed items)
   - Report statistics on completion
+
+## Documentation
+
+Keep these files up to date when adding features, changing key bindings, or modifying CLI commands:
+
+- **[README.md](README.md)** — Project overview, feature list, quick start, architecture diagram
+- **[USAGE.md](USAGE.md)** — Complete TUI key bindings, CLI command reference, mouse support
+- **[ROADMAP.md](ROADMAP.md)** — Feature roadmap; move items to "Implemented" when done

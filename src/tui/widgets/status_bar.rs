@@ -92,7 +92,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 
         // Cancel hint
         spans.push(Span::styled(
-            " [Esc]",
+            " [q]",
             Style::default().fg(HELP_TEXT),
         ));
 

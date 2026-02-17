@@ -42,6 +42,21 @@
 - [x] Directory rename with word suggestions from subdirs
 - [x] Filter popup UX improvements (auto-apply, better navigation)
 
+### Phase 4.7: Performance & Polish
+- [x] Background preview loading (non-blocking image decode in worker thread)
+- [x] LRU preview cache (bounded memory, 200 items)
+- [x] Smooth scrolling with deferred file loading and skip-preview
+- [x] Preload adjacent files for instant display
+- [x] Batch tag fetching (single query per directory)
+- [x] Mouse support (click, double-click, scroll wheel)
+- [x] Vim-style navigation in tag and filter popups (j/k/h/l/i modes)
+- [x] Operation queue (sequential execution, +N queued indicator)
+- [x] Rich progress indicators (visual bar, spinner, elapsed, ETA)
+- [x] Status CLI command (`picman status`)
+- [x] Repair CLI command (`picman repair`)
+- [x] `--check` flag for thumbnails and previews commands
+- [x] Tracing infrastructure for debugging
+
 ## Planned (Core)
 
 ### Phase 5: Culling Workflow

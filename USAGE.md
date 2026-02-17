@@ -21,12 +21,18 @@ picman /path/to/library
 | `0` | Clear rating |
 | `t` | Add tag (opens popup with autocomplete) |
 | `r` | Rename directory (with word suggestions from subdirs) |
-| `o` | Operations menu (thumbnails, orientation, hash) |
+| `o` | Operations menu (thumbnails, orientation, hash, dir previews) |
 | `m` | Filter by rating/tags |
-| `p` | Generate directory preview (selected dir only) |
-| `P` | Generate directory previews (recursive) |
 | `?` | Toggle help overlay |
-| `q` | Quit |
+| `q` | Quit (or cancel background operation) |
+
+### Mouse Support
+
+| Action | Effect |
+|--------|--------|
+| Click | Select item / focus pane |
+| Double-click | Open/expand (same as Enter) |
+| Scroll wheel | Move selection up/down |
 
 ### File Actions
 
@@ -37,42 +43,68 @@ picman /path/to/library
 
 Images and videos show preview thumbnails. Thumbnails are cached to `~/.cache/picman/thumbnails/` at 1440p resolution for fast subsequent access.
 
-- **Images**: Shows cached thumbnail if available, otherwise falls back to original file
+- **Images**: Shows cached thumbnail if available, otherwise loads in background
 - **Videos**: Shows thumbnail extracted via ffmpeg (requires ffmpeg installed)
+- **Directories**: Shows composite preview from child files/subdirectories
+
+Previews are loaded in a background thread with an LRU cache (200 items). Adjacent files are preloaded for instant display when scrolling.
 
 ### Operations Menu
 
-Press `o` to open the operations menu for batch processing on the selected directory and all subdirectories:
+Press `o` to open the operations menu for batch processing on the selected directory. Navigate with `j`/`k` or arrow keys, select with `Enter` or the number key:
 
 | Key | Operation | Description |
 |-----|-----------|-------------|
-| `1` / `t` | Thumbnails | Generate preview thumbnails |
-| `2` / `o` | Orientation | Tag images as landscape/portrait (EXIF-aware) |
-| `3` / `h` | Hash | Compute file hashes |
+| `1` | Thumbnails | Generate preview thumbnails |
+| `2` | Orientation | Tag images as landscape/portrait (EXIF-aware) |
+| `3` | Hash | Compute file hashes |
+| `4` | Dir preview | Generate directory preview (current only) |
+| `5` | Dir preview (recursive) | Generate directory previews with subdirectories |
 
-- Operations run in parallel in the background with progress shown in status bar
+- Operations 1-3 run in parallel in the background with progress shown in status bar
 - Already-processed files are skipped (existing thumbnails/tags/hashes)
 - Press `q` during an operation to cancel gracefully
+- Only one operation runs at a time; additional operations are queued
 
 ### Tag Popup
 
-When adding a tag (`t`):
+Press `t` to open the tag popup. It has two modes:
+
+**Browse mode** (default):
+- `j` / `k` or `↑` / `↓` to navigate suggestions
+- `Enter` on a tag to apply it
+- `i` or `Enter` on the input line to switch to edit mode
+- `Esc` to close
+
+**Edit mode** (type to filter/create):
 - Type to filter existing tags or create a new one
-- `↑` / `↓` to navigate suggestions
+- `↑` / `↓` to navigate filtered suggestions
 - `Enter` to apply selected/typed tag
-- `Esc` to cancel
+- `Backspace` on empty input exits edit mode
+- `Esc` to exit edit mode
 
 ### Filter Popup
 
-When filtering (`m`):
-- `↑` / `↓` or `Tab` to navigate between Rating, Video Only, and Tag sections
-- `←` / `→` or `1-5` / `a-g` to select rating filter: Any, Unrated, or minimum 1-5
-- `v` or `Space`/`Enter` (when on Video Only) to toggle video-only filter
-- Type to filter available tags, `↑` / `↓` to navigate tag list
-- `Enter` or `Space` to add selected tag to filter (multiple tags use AND logic)
-- `Backspace` to remove last added tag (when input is empty)
+Press `m` to open the filter dialog. It has sections for Rating, Video Only, and Tags. All changes auto-apply immediately.
+
+**Navigation (browse mode):**
+- `j` / `k` or `↑` / `↓` to move between sections (or within tag list)
+- `Tab` / `Shift+Tab` to move between sections
+- `h` / `l` or `←` / `→` to adjust rating
+- `1-5` / `a-g` to set rating directly
+- `u` to set unrated filter
+- `v` to toggle video-only filter
+- `Space` / `Enter` to toggle video or select tag
 - `0` to clear entire filter
-- `m` or `Esc` to close (filter auto-applies on every change)
+- `Backspace` to remove last added tag
+- `m` or `Esc` to close
+
+**Tag editing (press `i` on tag input line):**
+- Type to filter available tags
+- `↑` / `↓` to navigate filtered list
+- `Enter` / `Space` to add selected tag (multiple tags use AND logic)
+- `Backspace` on empty input exits editing mode
+- `Esc` to exit editing mode
 
 When a filter is active, the status bar shows: `[Filter: video 3+ #tag1 #tag2]`
 
@@ -135,19 +167,35 @@ picman tag /path/to/library photos/image.jpg --list
 Generate thumbnails for all media files (images and videos).
 ```bash
 picman thumbnails /path/to/library
+picman thumbnails /path/to/library --check  # show which dirs are missing thumbnails
 ```
 - Skips files that already have thumbnails
-- Shows progress for each file
+- Shows progress with progress bar
 - Video thumbnails require ffmpeg
 
 ### previews
 Generate directory preview images (composite thumbnails shown when browsing directories).
 ```bash
 picman previews /path/to/library
+picman previews /path/to/library --check  # show which dirs are missing previews
 ```
 - Skips directories that already have previews
-- Shows progress for each directory
+- Shows progress with progress bar
 - Runs faster if thumbnails are generated first (`picman thumbnails` before `picman previews`)
+
+### status
+Show library health information.
+```bash
+picman status /path/to/library
+```
+Reports directory/file counts, missing thumbnails, missing previews, and files without hashes.
+
+### repair
+Fix directory parent relationships based on paths.
+```bash
+picman repair /path/to/library
+```
+Useful after database corruption or manual edits.
 
 ## Known Limitations
 
