@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -40,4 +40,20 @@ pub struct PaginatedFiles {
     pub total: usize,
     pub page: usize,
     pub per_page: usize,
+}
+
+#[derive(Deserialize)]
+pub struct SetRatingRequest {
+    pub rating: Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct AddTagRequest {
+    pub tag: String,
+}
+
+#[derive(Serialize)]
+pub struct DirectoryMetaResponse {
+    pub rating: Option<i32>,
+    pub tags: Vec<String>,
 }

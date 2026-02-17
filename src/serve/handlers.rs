@@ -215,6 +215,69 @@ pub async fn get_tags(
     Ok(Json(tags))
 }
 
+// ==================== Directory Mutations ====================
+
+pub async fn set_directory_rating(
+    State(state): State<Arc<AppState>>,
+    Path(dir_id): Path<i64>,
+    Json(body): Json<SetRatingRequest>,
+) -> Result<Json<DirectoryMetaResponse>, AppError> {
+    if let Some(r) = body.rating {
+        if !(1..=5).contains(&r) {
+            return Err(AppError::BadRequest("Rating must be between 1 and 5".into()));
+        }
+    }
+
+    let db = state.db.clone();
+    let meta = spawn_db(db, move |db| {
+        db.set_directory_rating(dir_id, body.rating)?;
+        let rating = db.get_directory(dir_id)?.map(|d| d.rating).unwrap_or(None);
+        let tags = db.get_directory_tags(dir_id)?;
+        Ok(DirectoryMetaResponse { rating, tags })
+    })
+    .await?;
+
+    Ok(Json(meta))
+}
+
+pub async fn add_directory_tag(
+    State(state): State<Arc<AppState>>,
+    Path(dir_id): Path<i64>,
+    Json(body): Json<AddTagRequest>,
+) -> Result<Json<DirectoryMetaResponse>, AppError> {
+    let tag = body.tag.trim().to_lowercase();
+    if tag.is_empty() {
+        return Err(AppError::BadRequest("Tag name cannot be empty".into()));
+    }
+
+    let db = state.db.clone();
+    let meta = spawn_db(db, move |db| {
+        db.add_directory_tag(dir_id, &tag)?;
+        let rating = db.get_directory(dir_id)?.map(|d| d.rating).unwrap_or(None);
+        let tags = db.get_directory_tags(dir_id)?;
+        Ok(DirectoryMetaResponse { rating, tags })
+    })
+    .await?;
+
+    Ok(Json(meta))
+}
+
+pub async fn remove_directory_tag(
+    State(state): State<Arc<AppState>>,
+    Path((dir_id, tag_name)): Path<(i64, String)>,
+) -> Result<Json<DirectoryMetaResponse>, AppError> {
+    let db = state.db.clone();
+    let meta = spawn_db(db, move |db| {
+        db.remove_directory_tag(dir_id, &tag_name)?;
+        let rating = db.get_directory(dir_id)?.map(|d| d.rating).unwrap_or(None);
+        let tags = db.get_directory_tags(dir_id)?;
+        Ok(DirectoryMetaResponse { rating, tags })
+    })
+    .await?;
+
+    Ok(Json(meta))
+}
+
 // ==================== Filtered Files ====================
 
 #[derive(serde::Deserialize)]
@@ -553,6 +616,7 @@ where
 
 pub enum AppError {
     NotFound,
+    BadRequest(String),
     Internal(String),
 }
 
@@ -560,6 +624,9 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
             AppError::NotFound => StatusCode::NOT_FOUND.into_response(),
+            AppError::BadRequest(msg) => {
+                (StatusCode::BAD_REQUEST, msg).into_response()
+            }
             AppError::Internal(msg) => {
                 eprintln!("Internal error: {}", msg);
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()

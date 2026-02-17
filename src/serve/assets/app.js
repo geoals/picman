@@ -29,6 +29,17 @@ async function fetchJson(url) {
     return res.json();
 }
 
+async function apiRequest(url, method, body) {
+    const opts = { method, headers: {} };
+    if (body !== undefined) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+}
+
 async function loadDirectories() {
     state.directories = await fetchJson("/api/directories");
     state.dirMap.clear();
@@ -213,6 +224,8 @@ function selectDirectory(dirId, { recursive = true } = {}) {
 
     renderDirectoryTree();
     renderBreadcrumb();
+    renderDirRating();
+    renderDirTags();
     renderFileCount();
     // Clear grid immediately so stale content doesn't linger
     document.getElementById("grid").innerHTML = '<div class="loading">Loading</div>';
@@ -471,6 +484,8 @@ function applyFilters() {
     }
 
     renderBreadcrumb();
+    renderDirRating();
+    renderDirTags();
     renderTagChips();
     loadFiles(1);
 }
@@ -573,6 +588,233 @@ function setupLightbox() {
                 break;
         }
     });
+}
+
+// ==================== Directory Rating ====================
+
+function renderDirRating() {
+    const container = document.getElementById("dir-rating");
+    container.innerHTML = "";
+
+    const dir = state.dirMap.get(state.selectedDirId);
+    if (!dir) return; // Hide for root/filtered views
+
+    const currentRating = dir.rating || 0;
+
+    for (let i = 1; i <= 5; i++) {
+        const star = document.createElement("span");
+        star.className = "star" + (i <= currentRating ? " filled" : "");
+        star.textContent = "★";
+
+        star.addEventListener("mouseenter", () => {
+            container.querySelectorAll(".star").forEach((s, idx) => {
+                s.classList.toggle("preview", idx < i && !s.classList.contains("filled"));
+            });
+        });
+
+        star.addEventListener("mouseleave", () => {
+            container.querySelectorAll(".star").forEach(s => s.classList.remove("preview"));
+        });
+
+        star.addEventListener("click", () => {
+            // Click current rating to clear
+            const newRating = (i === currentRating) ? null : i;
+            setDirRating(newRating);
+        });
+
+        container.appendChild(star);
+    }
+}
+
+async function setDirRating(value) {
+    const dir = state.dirMap.get(state.selectedDirId);
+    if (!dir) return;
+
+    try {
+        const meta = await apiRequest(`/api/directories/${dir.id}/rating`, "PUT", { rating: value });
+        dir.rating = meta.rating;
+        dir.tags = meta.tags;
+        renderDirRating();
+    } catch (err) {
+        console.error("Failed to set rating:", err);
+    }
+}
+
+// ==================== Directory Tags ====================
+
+function renderDirTags() {
+    const container = document.getElementById("dir-tags");
+    container.innerHTML = "";
+
+    const dir = state.dirMap.get(state.selectedDirId);
+    if (!dir) return; // Hide for root/filtered views
+
+    for (const tag of dir.tags) {
+        const chip = document.createElement("span");
+        chip.className = "dir-tag-chip";
+
+        const name = document.createElement("span");
+        name.textContent = "#" + tag;
+
+        const remove = document.createElement("span");
+        remove.className = "remove-tag";
+        remove.textContent = "×";
+        remove.addEventListener("click", (e) => {
+            e.stopPropagation();
+            removeDirTag(tag);
+        });
+
+        chip.appendChild(name);
+        chip.appendChild(remove);
+        container.appendChild(chip);
+    }
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "dir-tag-add";
+    addBtn.textContent = "+";
+    addBtn.addEventListener("click", () => showTagInput(container, addBtn));
+    container.appendChild(addBtn);
+}
+
+function showTagInput(container, addBtn) {
+    // Don't open if already showing input
+    if (container.querySelector(".dir-tag-input-wrapper")) return;
+
+    addBtn.style.display = "none";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "dir-tag-input-wrapper";
+
+    const input = document.createElement("input");
+    input.className = "dir-tag-input";
+    input.type = "text";
+    input.placeholder = "tag…";
+
+    const suggestions = document.createElement("div");
+    suggestions.className = "dir-tag-suggestions";
+    suggestions.style.display = "none";
+
+    let activeIndex = -1;
+
+    function updateSuggestions() {
+        const query = input.value.trim().toLowerCase();
+        suggestions.innerHTML = "";
+        activeIndex = -1;
+
+        if (!query) {
+            suggestions.style.display = "none";
+            return;
+        }
+
+        const dir = state.dirMap.get(state.selectedDirId);
+        const existingTags = new Set(dir ? dir.tags : []);
+        const matches = state.tags
+            .filter(t => t.name.includes(query) && !existingTags.has(t.name))
+            .slice(0, 10);
+
+        if (matches.length === 0) {
+            suggestions.style.display = "none";
+            return;
+        }
+
+        for (const tag of matches) {
+            const item = document.createElement("div");
+            item.className = "suggestion";
+            item.textContent = "#" + tag.name;
+            item.addEventListener("mousedown", (e) => {
+                e.preventDefault(); // Prevent input blur
+                addDirTag(tag.name);
+                closeInput();
+            });
+            suggestions.appendChild(item);
+        }
+
+        suggestions.style.display = "block";
+    }
+
+    function highlightSuggestion(index) {
+        const items = suggestions.querySelectorAll(".suggestion");
+        items.forEach((item, i) => item.classList.toggle("active", i === index));
+        if (items[index]) items[index].scrollIntoView({ block: "nearest" });
+    }
+
+    input.addEventListener("input", updateSuggestions);
+
+    input.addEventListener("keydown", (e) => {
+        const items = suggestions.querySelectorAll(".suggestion");
+
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            activeIndex = Math.min(activeIndex + 1, items.length - 1);
+            highlightSuggestion(activeIndex);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            activeIndex = Math.max(activeIndex - 1, 0);
+            highlightSuggestion(activeIndex);
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (activeIndex >= 0 && items[activeIndex]) {
+                const text = items[activeIndex].textContent.replace("#", "");
+                addDirTag(text);
+            } else if (input.value.trim()) {
+                addDirTag(input.value.trim());
+            }
+            closeInput();
+        } else if (e.key === "Escape") {
+            closeInput();
+        }
+    });
+
+    function closeInput() {
+        wrapper.remove();
+        addBtn.style.display = "";
+    }
+
+    input.addEventListener("blur", () => {
+        // Small delay to allow mousedown on suggestions to fire
+        setTimeout(closeInput, 150);
+    });
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(suggestions);
+    container.appendChild(wrapper);
+    input.focus();
+}
+
+async function addDirTag(name) {
+    const dir = state.dirMap.get(state.selectedDirId);
+    if (!dir) return;
+
+    const tag = name.trim().toLowerCase();
+    if (!tag) return;
+
+    try {
+        const meta = await apiRequest(`/api/directories/${dir.id}/tags`, "POST", { tag });
+        dir.rating = meta.rating;
+        dir.tags = meta.tags;
+        renderDirTags();
+        // Refresh tags list in case a new tag was created
+        loadTags().then(renderTagChips);
+    } catch (err) {
+        console.error("Failed to add tag:", err);
+    }
+}
+
+async function removeDirTag(name) {
+    const dir = state.dirMap.get(state.selectedDirId);
+    if (!dir) return;
+
+    try {
+        const meta = await apiRequest(
+            `/api/directories/${dir.id}/tags/${encodeURIComponent(name)}`,
+            "DELETE"
+        );
+        dir.rating = meta.rating;
+        dir.tags = meta.tags;
+        renderDirTags();
+    } catch (err) {
+        console.error("Failed to remove tag:", err);
+    }
 }
 
 // ==================== Zoom ====================
