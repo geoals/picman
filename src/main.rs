@@ -5,10 +5,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use picman::cli::{
     run_check_previews, run_check_thumbnails, run_generate_previews, run_generate_thumbnails,
-    run_init, run_list, run_rate, run_repair, run_status, run_sync, run_tag, ListOptions,
-    TagOptions,
+    run_generate_web_thumbnails, run_init, run_list, run_rate, run_repair, run_status, run_sync,
+    run_tag, ListOptions, TagOptions,
 };
 use picman::logging::init_logging;
+use picman::serve::run_serve;
 use picman::tui::run_tui;
 
 #[derive(Parser)]
@@ -120,6 +121,9 @@ enum Commands {
         /// Check which directories are missing thumbnails (don't generate)
         #[arg(long)]
         check: bool,
+        /// Generate small (400px) web thumbnails for grid display
+        #[arg(long)]
+        web: bool,
     },
     /// Repair directory parent relationships based on paths
     Repair {
@@ -132,6 +136,14 @@ enum Commands {
         /// Path to library root (defaults to current directory)
         #[arg(default_value = ".")]
         path: PathBuf,
+    },
+    /// Start web server to browse photos
+    Serve {
+        /// Path to library root
+        path: PathBuf,
+        /// Port to listen on
+        #[arg(long, default_value = "3000")]
+        port: u16,
     },
 }
 
@@ -266,9 +278,15 @@ fn run_command(cli: Cli) -> Result<()> {
                 );
             }
         }
-        Some(Commands::Thumbnails { path, check }) => {
+        Some(Commands::Thumbnails { path, check, web }) => {
             if check {
                 run_check_thumbnails(&path)?;
+            } else if web {
+                let stats = run_generate_web_thumbnails(&path)?;
+                println!(
+                    "Done: {} generated, {} skipped, {} failed, {} total",
+                    stats.generated, stats.skipped, stats.failed, stats.total
+                );
             } else {
                 let stats = run_generate_thumbnails(&path)?;
                 println!(
@@ -287,6 +305,9 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         Some(Commands::Status { path }) => {
             run_status(&path)?;
+        }
+        Some(Commands::Serve { path, port }) => {
+            run_serve(&path, port)?;
         }
         None => {
             // Launch TUI

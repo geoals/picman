@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Picman</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <h1>Picman</h1>
+            <div id="filters">
+                <label for="rating-filter">Rating</label>
+                <select id="rating-filter">
+                    <option value="">Any</option>
+                    <option value="1">&#9733; 1+</option>
+                    <option value="2">&#9733; 2+</option>
+                    <option value="3">&#9733; 3+</option>
+                    <option value="4">&#9733; 4+</option>
+                    <option value="5">&#9733; 5</option>
+                </select>
+                <label>Tags</label>
+                <div id="tag-chips" class="tag-chips"></div>
+            </div>
+            <div id="directory-tree"></div>
+        </aside>
+        <main id="main">
+            <div id="toolbar">
+                <div id="breadcrumb"></div>
+                <div id="file-count"></div>
+            </div>
+            <div id="grid"></div>
+        </main>
+    </div>
+    <div id="lightbox" class="hidden">
+        <button class="close-btn" title="Close (Esc)">&times;</button>
+        <button class="nav-btn nav-prev" title="Previous (&larr;)">&lsaquo;</button>
+        <button class="nav-btn nav-next" title="Next (&rarr;)">&rsaquo;</button>
+        <img src="" alt="">
+        <div class="info-bar">
+            <span class="filename"></span>
+            <span class="rating"></span>
+            <span class="tags"></span>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

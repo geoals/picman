@@ -72,14 +72,26 @@ static THUMBNAIL_CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::n
 const THUMBNAIL_MAX_HEIGHT: u32 = 1440;
 const THUMBNAIL_QUALITY: u8 = 80;
 
+// Web thumbnail settings (small grid thumbnails for web UI)
+const WEB_THUMBNAIL_MAX_WIDTH: u32 = 400;
+const WEB_THUMBNAIL_QUALITY: u8 = 75;
+
 fn get_thumbnail_cache() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
     THUMBNAIL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Get the thumbnail cache directory (~/.cache/picman/thumbnails)
-fn get_thumbnail_dir() -> Option<PathBuf> {
+pub fn get_thumbnail_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let cache_dir = PathBuf::from(home).join(".cache/picman/thumbnails");
+    std::fs::create_dir_all(&cache_dir).ok()?;
+    Some(cache_dir)
+}
+
+/// Get the web thumbnail cache directory (~/.cache/picman/web_thumbnails)
+pub fn get_web_thumbnail_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let cache_dir = PathBuf::from(home).join(".cache/picman/web_thumbnails");
     std::fs::create_dir_all(&cache_dir).ok()?;
     Some(cache_dir)
 }
@@ -262,6 +274,88 @@ pub fn generate_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
         if let Ok(mut cache) = get_thumbnail_cache().lock() {
             cache.insert(video_path.to_path_buf(), thumb_path.clone());
         }
+        Some(thumb_path)
+    } else {
+        None
+    }
+}
+
+// ==================== Web Thumbnail (Grid) Generation ====================
+
+/// Generate a web thumbnail path for an image based on its path hash.
+/// Same hashing scheme as regular thumbnails, but stored in web_thumbnails/.
+pub fn get_web_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let cache_dir = get_web_thumbnail_dir()?;
+    let mut hasher = DefaultHasher::new();
+    original_path.hash(&mut hasher);
+
+    let mtime = std::fs::metadata(original_path).ok()?.modified().ok()?;
+    mtime.hash(&mut hasher);
+
+    Some(cache_dir.join(format!("{:016x}.jpg", hasher.finish())))
+}
+
+/// Check if a web thumbnail exists for a file
+pub fn has_web_thumbnail(path: &Path) -> bool {
+    if is_image_file(path) {
+        get_web_thumbnail_path(path).map(|p| p.exists()).unwrap_or(false)
+    } else if is_video_file(path) {
+        // Video web thumbnails use same path (extracted frame is already small)
+        get_web_thumbnail_path(path).map(|p| p.exists()).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/// Generate a small (400px wide) web thumbnail for grid display
+pub fn generate_web_thumbnail(image_path: &Path) -> Option<PathBuf> {
+    let thumb_path = get_web_thumbnail_path(image_path)?;
+
+    let img = image::open(image_path).ok()?;
+    let img = apply_exif_orientation(image_path, img);
+
+    // Resize to max width, preserving aspect ratio
+    let img = if img.width() > WEB_THUMBNAIL_MAX_WIDTH {
+        img.resize(
+            WEB_THUMBNAIL_MAX_WIDTH,
+            u32::MAX,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        img
+    };
+
+    let mut output = std::fs::File::create(&thumb_path).ok()?;
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, WEB_THUMBNAIL_QUALITY);
+    img.to_rgb8().write_with_encoder(encoder).ok()?;
+
+    Some(thumb_path)
+}
+
+/// Generate a small web thumbnail from a video file using ffmpeg
+pub fn generate_web_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
+    let thumb_path = get_web_thumbnail_path(video_path)?;
+
+    let scale_filter = format!("scale={}:-1", WEB_THUMBNAIL_MAX_WIDTH);
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-i", video_path.to_str()?,
+            "-ss", "00:00:01",
+            "-vframes", "1",
+            "-vf", &scale_filter,
+            "-q:v", "5",
+            thumb_path.to_str()?,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+
+    if status.success() && thumb_path.exists() {
         Some(thumb_path)
     } else {
         None

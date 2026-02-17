@@ -1,0 +1,441 @@
+/* ==================== Reset & Base ==================== */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --sidebar-width: 280px;
+    --toolbar-height: 48px;
+    --bg: #1a1a1a;
+    --bg-surface: #242424;
+    --bg-hover: #2e2e2e;
+    --bg-active: #383838;
+    --text: #e0e0e0;
+    --text-muted: #888;
+    --accent: #5b9bd5;
+    --accent-hover: #7bb3e0;
+    --border: #333;
+    --rating-color: #f5c518;
+    --tag-color: #6bc76b;
+    --scrollbar-thumb: #444;
+    --scrollbar-track: transparent;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+}
+
+/* ==================== Layout ==================== */
+
+#app {
+    display: flex;
+    height: 100vh;
+}
+
+/* ==================== Sidebar ==================== */
+
+#sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#sidebar h1 {
+    font-size: 1.1rem;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--accent);
+    letter-spacing: 0.5px;
+}
+
+#filters {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+#filters label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+#filters select,
+#filters input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+    width: 100%;
+}
+
+#filters select:focus,
+#filters input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+#directory-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+/* ==================== Directory Tree ==================== */
+
+.dir-item {
+    display: flex;
+    align-items: center;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+}
+
+.dir-item:hover {
+    background: var(--bg-hover);
+}
+
+.dir-item.selected {
+    background: var(--bg-active);
+    color: var(--accent);
+}
+
+.dir-toggle {
+    width: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 0.7rem;
+}
+
+.dir-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dir-count {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+
+/* ==================== Main Content ==================== */
+
+#main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ==================== Toolbar ==================== */
+
+#toolbar {
+    height: var(--toolbar-height);
+    min-height: var(--toolbar-height);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    font-size: 0.85rem;
+}
+
+#breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    flex: 1;
+    overflow: hidden;
+}
+
+#breadcrumb span {
+    cursor: pointer;
+}
+
+#breadcrumb span:hover {
+    color: var(--accent);
+}
+
+#breadcrumb .separator {
+    cursor: default;
+    color: var(--text-muted);
+}
+
+#breadcrumb .current {
+    color: var(--text);
+    cursor: default;
+}
+
+#file-count {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* ==================== Photo Grid ==================== */
+
+#grid {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 4px;
+}
+
+.photo-cell {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    cursor: pointer;
+    background: var(--bg-surface);
+    border-radius: 2px;
+}
+
+.photo-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.15s ease;
+}
+
+.photo-cell:hover img {
+    transform: scale(1.03);
+}
+
+.photo-cell .overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 6px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+}
+
+.photo-cell:hover .overlay {
+    opacity: 1;
+}
+
+.photo-cell .filename {
+    font-size: 0.7rem;
+    color: #ccc;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.photo-cell .rating {
+    color: var(--rating-color);
+    font-size: 0.7rem;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.photo-cell .video-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 0.65rem;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+/* ==================== Tag Chips ==================== */
+
+.tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+}
+
+.tag-chip {
+    background: var(--bg-hover);
+    color: var(--tag-color);
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.tag-chip:hover {
+    border-color: var(--tag-color);
+}
+
+.tag-chip.active {
+    background: var(--tag-color);
+    color: var(--bg);
+    border-color: var(--tag-color);
+}
+
+/* ==================== Lightbox ==================== */
+
+#lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.92);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+#lightbox.hidden {
+    display: none;
+}
+
+#lightbox img {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
+    cursor: default;
+}
+
+#lightbox .nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    border: none;
+    font-size: 2rem;
+    padding: 16px 12px;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+}
+
+#lightbox .nav-btn:hover {
+    opacity: 1;
+}
+
+#lightbox .nav-prev { left: 0; }
+#lightbox .nav-next { right: 0; }
+
+#lightbox .close-btn {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.5rem;
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+#lightbox .close-btn:hover {
+    opacity: 1;
+}
+
+#lightbox .info-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 12px 16px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85rem;
+}
+
+#lightbox .info-bar .rating {
+    color: var(--rating-color);
+}
+
+#lightbox .info-bar .tags {
+    color: var(--tag-color);
+}
+
+/* ==================== Loading / Empty States ==================== */
+
+.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    color: var(--text-muted);
+}
+
+.loading::after {
+    content: "";
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-left: 8px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+/* ==================== Scrollbars ==================== */
+
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}

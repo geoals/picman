@@ -3,6 +3,7 @@ pub mod db;
 pub mod hash;
 pub mod logging;
 pub mod scanner;
+pub mod serve;
 pub mod suggestions;
 pub mod thumbnails;
 pub mod tui;

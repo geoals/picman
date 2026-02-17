@@ -16,4 +16,4 @@ pub use repair::run_repair;
 pub use status::run_status;
 pub use sync::{run_sync, run_sync_incremental};
 pub use tag::{run_tag, TagOptions};
-pub use thumbnails::{run_check_thumbnails, run_generate_thumbnails};
+pub use thumbnails::{run_check_thumbnails, run_generate_thumbnails, run_generate_web_thumbnails};
