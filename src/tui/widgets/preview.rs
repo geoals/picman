@@ -865,6 +865,10 @@ fn render_file_preview(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block.clone(), area);
 
+    // Update the preview area hint so the background worker can pre-encode
+    // images at the right size (cheap atomic store, runs every render cycle)
+    state.preview_loader.borrow().set_preview_area(inner.width, inner.height);
+
     // Check if we need to load a new image (cache miss)
     // For videos, we cache by the original file path, not the thumbnail path
     let mut cache = state.preview_cache.borrow_mut();

@@ -853,16 +853,11 @@ impl AppState {
     /// Called at the start of each render cycle.
     /// Also preloads other files in the current directory.
     pub fn poll_preview_results(&self) {
-        use crate::tui::widgets::create_protocol;
-
         let results = self.preview_loader.borrow_mut().poll_results();
 
         for result in results {
-            if let Some(image) = result.image {
-                // Create protocol on main thread (picker is not thread-safe)
-                if let Some(protocol) = create_protocol(image) {
-                    self.preview_cache.borrow_mut().insert(result.path, protocol);
-                }
+            if let Some(protocol) = result.protocol {
+                self.preview_cache.borrow_mut().insert(result.path, protocol);
             }
         }
 
