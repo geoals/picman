@@ -283,14 +283,16 @@ pub fn generate_video_thumbnail(video_path: &Path) -> Option<PathBuf> {
 // ==================== Web Thumbnail (Grid) Generation ====================
 
 /// Generate a web thumbnail path for an image based on its path hash.
-/// Same hashing scheme as regular thumbnails, but stored in web_thumbnails/.
+/// Canonicalizes the path before hashing so that relative and absolute paths
+/// produce the same hash (e.g. `./photo.jpg` and `/home/user/lib/photo.jpg`).
 pub fn get_web_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let cache_dir = get_web_thumbnail_dir()?;
+    let canonical = original_path.canonicalize().ok()?;
     let mut hasher = DefaultHasher::new();
-    original_path.hash(&mut hasher);
+    canonical.hash(&mut hasher);
 
     let mtime = std::fs::metadata(original_path).ok()?.modified().ok()?;
     mtime.hash(&mut hasher);
