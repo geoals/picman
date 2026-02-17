@@ -10,7 +10,7 @@ use tracing::{debug, info, instrument, warn};
 use crate::db::Database;
 use crate::hash::compute_file_hash;
 use crate::scanner::{detect_orientation, Scanner};
-use crate::tui::widgets::{compute_thumbnail_path, compute_video_thumbnail_path, is_image_file, is_video_file};
+use crate::thumbnails::{compute_thumbnail_path, compute_video_thumbnail_path, is_image_file, is_video_file};
 
 use super::init::DB_FILENAME;
 

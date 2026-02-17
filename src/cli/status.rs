@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
 use crate::db::Database;
-use crate::tui::widgets::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
+use crate::thumbnails::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
 
 /// Show library status and health information
 pub fn run_status(library_path: &Path) -> Result<()> {

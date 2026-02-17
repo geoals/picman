@@ -900,7 +900,7 @@ impl AppState {
 
     /// Preload all image/video files in the current directory that aren't already cached or pending.
     fn preload_directory_files(&self) {
-        use crate::tui::widgets::get_preview_path_for_file;
+        use crate::thumbnails::get_preview_path_for_file;
 
         let dir_id = match self.current_dir_id {
             Some(id) => id,
@@ -1707,7 +1707,7 @@ impl AppState {
             return;
         }
 
-        use crate::tui::widgets::{has_thumbnail, is_image_file, is_video_file};
+        use crate::thumbnails::{has_thumbnail, is_image_file, is_video_file};
 
         let selected_dir = match self.get_selected_directory() {
             Some(d) => d.clone(),
@@ -1791,7 +1791,7 @@ impl AppState {
 
             match operation {
                 OperationType::Thumbnails => {
-                    use crate::tui::widgets::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
+                    use crate::thumbnails::{generate_image_thumbnail, generate_video_thumbnail, is_image_file, is_video_file};
 
                     file_data.par_iter().for_each(|(_, path)| {
                         if cancelled.load(Ordering::Relaxed) {
@@ -1870,10 +1870,10 @@ impl AppState {
     /// Run directory preview generation (single or recursive)
     fn run_dir_preview_operation(&mut self, operation: OperationType) {
         use crate::db::Database;
-        use crate::tui::widgets::{
-            collect_preview_images_standalone, generate_dir_preview,
-            generate_dir_preview_from_paths, TempPreviewState,
+        use crate::thumbnails::{
+            collect_preview_images_standalone, generate_dir_preview_from_paths, TempPreviewState,
         };
+        use crate::tui::widgets::generate_dir_preview;
 
         let selected_dir = match self.get_selected_directory() {
             Some(d) => d.clone(),

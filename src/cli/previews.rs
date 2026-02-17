@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
 use crate::db::Database;
-use crate::tui::widgets::{
+use crate::thumbnails::{
     collect_preview_images_standalone, generate_dir_preview_from_paths, has_dir_preview,
     TempPreviewState,
 };

@@ -8,7 +8,8 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 
-use super::widgets::{apply_exif_orientation, create_protocol, is_image_file};
+use crate::thumbnails::{apply_exif_orientation, is_image_file};
+use super::widgets::create_protocol;
 
 /// Request to load an image in the background
 pub struct LoadRequest {

@@ -11,7 +11,7 @@ use crate::tui::colors::{
 };
 use crate::tui::state::{AppState, Focus};
 
-use super::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
+use crate::thumbnails::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
 
 pub fn render_details_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let content = match state.focus {
