@@ -1,0 +1,83 @@
+/* Toolbar, breadcrumb, zoom controls, file count. */
+
+#toolbar {
+    height: var(--toolbar-height);
+    min-height: var(--toolbar-height);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    font-size: 0.85rem;
+}
+
+#breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    flex: 1;
+    overflow: hidden;
+}
+
+#breadcrumb span {
+    cursor: pointer;
+    transition: color 0.1s;
+}
+
+#breadcrumb span:hover {
+    color: var(--accent);
+}
+
+#breadcrumb .separator {
+    cursor: default;
+    color: var(--text-muted);
+}
+
+#breadcrumb .current {
+    color: var(--text);
+    cursor: default;
+}
+
+#file-count {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.zoom-controls {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.zoom-controls button {
+    background: var(--bg);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
+}
+
+.zoom-controls button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.zoom-controls button:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.zoom-controls button:disabled:hover {
+    border-color: var(--border);
+    color: var(--text-muted);
+}

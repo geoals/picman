@@ -1,0 +1,46 @@
+/* Directory tree items. */
+
+.dir-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    border-left: 3px solid transparent;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.dir-item:hover {
+    background: var(--bg-hover);
+}
+
+.dir-item.selected {
+    background: var(--bg-active);
+    border-left-color: var(--accent);
+    color: var(--accent);
+}
+
+.dir-toggle {
+    width: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 0.7rem;
+}
+
+.dir-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dir-count {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-left: 4px;
+    flex-shrink: 0;
+}

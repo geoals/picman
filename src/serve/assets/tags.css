@@ -1,0 +1,171 @@
+/* Rating stars, directory tag chips, tag input/autocomplete, sidebar tag filter chips. */
+
+/* ==================== Directory Rating ==================== */
+
+.dir-rating {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+}
+
+.dir-rating .star {
+    font-size: 1rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.15s;
+    user-select: none;
+    line-height: 1;
+}
+
+.dir-rating .star.filled {
+    color: var(--rating-color);
+}
+
+.dir-rating .star.preview {
+    color: var(--rating-color);
+    opacity: 0.7;
+}
+
+/* ==================== Directory Tag Chips ==================== */
+
+.dir-tags {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    max-width: 300px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.dir-tags::-webkit-scrollbar {
+    display: none;
+}
+
+.dir-tag-chip {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-hover);
+    color: var(--tag-color);
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 12px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    transition: border-color 0.1s;
+}
+
+.dir-tag-chip:hover {
+    border-color: var(--tag-color);
+}
+
+.dir-tag-chip .remove-tag {
+    cursor: pointer;
+    font-size: 0.65rem;
+    opacity: 0.5;
+    margin-left: 2px;
+    line-height: 1;
+    transition: opacity 0.1s;
+}
+
+.dir-tag-chip .remove-tag:hover {
+    opacity: 1;
+}
+
+.dir-tag-add {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
+}
+
+.dir-tag-add:hover {
+    border-color: var(--tag-color);
+    color: var(--tag-color);
+}
+
+/* ==================== Tag Input / Autocomplete ==================== */
+
+.dir-tag-input-wrapper {
+    position: relative;
+}
+
+.dir-tag-input {
+    width: 100px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--tag-color);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.75rem;
+    outline: none;
+}
+
+.dir-tag-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+    z-index: 100;
+    margin-top: 2px;
+}
+
+.dir-tag-suggestions .suggestion {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    color: var(--tag-color);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.dir-tag-suggestions .suggestion:hover,
+.dir-tag-suggestions .suggestion.active {
+    background: var(--bg-hover);
+}
+
+/* ==================== Sidebar Tag Filter Chips ==================== */
+
+.tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+}
+
+.tag-chip {
+    background: var(--bg-hover);
+    color: var(--tag-color);
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+
+.tag-chip:hover {
+    border-color: var(--tag-color);
+}
+
+.tag-chip.active {
+    background: var(--tag-color);
+    color: var(--bg);
+    border-color: var(--tag-color);
+}

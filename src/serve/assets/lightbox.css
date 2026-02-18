@@ -1,0 +1,120 @@
+/* Full-screen photo viewer. */
+
+#lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 9, 8, 0.95);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+#lightbox.hidden {
+    display: none;
+}
+
+#lightbox img {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
+    cursor: default;
+}
+
+#lightbox .nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(20, 18, 16, 0.6);
+    color: #b0a99f;
+    border: none;
+    font-size: 2rem;
+    padding: 16px 12px;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+}
+
+#lightbox .nav-btn:hover {
+    opacity: 1;
+    color: #fff;
+}
+
+#lightbox .nav-prev { left: 0; }
+#lightbox .nav-next { right: 0; }
+
+#lightbox .close-btn {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    color: #b0a99f;
+    font-size: 1.5rem;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+#lightbox .close-btn:hover {
+    opacity: 1;
+    color: #fff;
+}
+
+#lightbox .lightbox-toolbar {
+    position: absolute;
+    bottom: 44px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 16px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+#lightbox:hover .lightbox-toolbar {
+    opacity: 1;
+}
+
+#lightbox .lightbox-toolbar .toolbar-btn {
+    pointer-events: auto;
+    background: rgba(20, 18, 16, 0.6);
+    color: #b0a99f;
+    border: 1px solid rgba(176, 169, 159, 0.2);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+#lightbox .lightbox-toolbar .toolbar-btn:hover {
+    background: rgba(20, 18, 16, 0.8);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+#lightbox .info-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 12px 16px;
+    background: linear-gradient(transparent, rgba(10, 9, 8, 0.85));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85rem;
+}
+
+#lightbox .info-bar .rating {
+    color: var(--rating-color);
+}
+
+#lightbox .info-bar .tags {
+    color: var(--tag-color);
+}
