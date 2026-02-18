@@ -116,7 +116,7 @@ pub async fn get_directory_files(
                      SELECT d.id FROM directories d
                      JOIN descendants dd ON d.parent_id = dd.id
                  )
-                 SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type
+                 SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type, f.width, f.height
                  FROM files f
                  JOIN directories d ON f.directory_id = d.id
                  WHERE f.directory_id IN (SELECT id FROM descendants)
@@ -125,7 +125,7 @@ pub async fn get_directory_files(
             )?
         } else {
             conn.prepare(
-                "SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type
+                "SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type, f.width, f.height
                  FROM files f
                  JOIN directories d ON f.directory_id = d.id
                  WHERE f.directory_id = ?1
@@ -134,7 +134,8 @@ pub async fn get_directory_files(
             )?
         };
 
-        let file_rows: Vec<(i64, String, i64, String, i64, Option<i32>, Option<String>)> = stmt
+        #[allow(clippy::type_complexity)]
+        let file_rows: Vec<(i64, String, i64, String, i64, Option<i32>, Option<String>, Option<i32>, Option<i32>)> = stmt
             .query_map(rusqlite::params![dir_id, per_page as i64, offset as i64], |row| {
                 Ok((
                     row.get(0)?,
@@ -144,6 +145,8 @@ pub async fn get_directory_files(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -154,7 +157,7 @@ pub async fn get_directory_files(
 
         let files: Vec<FileResponse> = file_rows
             .into_iter()
-            .map(|(id, filename, directory_id, dir_path, size, rating, media_type)| {
+            .map(|(id, filename, directory_id, dir_path, size, rating, media_type, width, height)| {
                 let tags = all_file_tags.get(&id).cloned().unwrap_or_default();
                 FileResponse {
                     id,
@@ -164,6 +167,8 @@ pub async fn get_directory_files(
                     size,
                     rating,
                     media_type,
+                    width,
+                    height,
                     tags,
                 }
             })
@@ -334,7 +339,7 @@ pub async fn get_filtered_files(
         let offset = (page - 1) * per_page;
 
         let query = format!(
-            "SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type
+            "SELECT f.id, f.filename, f.directory_id, d.path, f.size, f.rating, f.media_type, f.width, f.height
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              {}
@@ -349,7 +354,8 @@ pub async fn get_filtered_files(
         sql_params.push(Box::new(offset as i64));
 
         let mut stmt = conn.prepare(&query)?;
-        let file_ids_and_data: Vec<(i64, String, i64, String, i64, Option<i32>, Option<String>)> = stmt
+        #[allow(clippy::type_complexity)]
+        let file_ids_and_data: Vec<(i64, String, i64, String, i64, Option<i32>, Option<String>, Option<i32>, Option<i32>)> = stmt
             .query_map(
                 rusqlite::params_from_iter(sql_params.iter().map(|p| p.as_ref())),
                 |row| {
@@ -361,6 +367,8 @@ pub async fn get_filtered_files(
                         row.get(4)?,
                         row.get(5)?,
                         row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )?
@@ -372,7 +380,7 @@ pub async fn get_filtered_files(
 
         let files: Vec<FileResponse> = file_ids_and_data
             .into_iter()
-            .map(|(id, filename, directory_id, dir_path, size, rating, media_type)| {
+            .map(|(id, filename, directory_id, dir_path, size, rating, media_type, width, height)| {
                 let tags = all_file_tags.get(&id).cloned().unwrap_or_default();
                 FileResponse {
                     id,
@@ -382,6 +390,8 @@ pub async fn get_filtered_files(
                     size,
                     rating,
                     media_type,
+                    width,
+                    height,
                     tags,
                 }
             })

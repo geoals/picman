@@ -24,6 +24,8 @@ pub struct FileResponse {
     pub size: i64,
     pub rating: Option<i32>,
     pub media_type: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     pub tags: Vec<String>,
 }
 

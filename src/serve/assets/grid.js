@@ -3,6 +3,9 @@
 import { state } from './state.js';
 import { loadFiles } from './api.js';
 
+// Track estimated column heights for shortest-column-first placement.
+let columnHeights = [];
+
 export function renderGrid(replace = true) {
     const container = document.getElementById("grid");
     const columnCount = state.zoomLevels[state.zoomIndex];
@@ -23,6 +26,7 @@ export function renderGrid(replace = true) {
 
     if (!grid || replace || grid.children.length !== columnCount) {
         existingCount = 0;
+        columnHeights = new Array(columnCount).fill(0);
         grid = document.createElement("div");
         grid.className = "photo-grid";
         container.innerHTML = "";
@@ -36,8 +40,16 @@ export function renderGrid(replace = true) {
     }
 
     for (let i = existingCount; i < state.currentFiles.length; i++) {
-        const col = grid.children[i % columnCount];
-        col.appendChild(createPhotoCell(state.currentFiles[i], i));
+        let minCol = 0;
+        for (let c = 1; c < columnCount; c++) {
+            if (columnHeights[c] < columnHeights[minCol]) minCol = c;
+        }
+
+        const file = state.currentFiles[i];
+        const ratio = (file.width && file.height) ? file.width / file.height : 3 / 2;
+        columnHeights[minCol] += 1 / ratio;
+
+        grid.children[minCol].appendChild(createPhotoCell(file, i));
     }
 }
 
@@ -47,6 +59,13 @@ function createPhotoCell(file, index) {
 
     const img = document.createElement("img");
     img.loading = "lazy";
+    // Always set aspect-ratio so unloaded images reserve the correct space.
+    // Must match the ratio used in renderGrid's height tracking.
+    if (file.width && file.height) {
+        img.style.aspectRatio = `${file.width} / ${file.height}`;
+    } else {
+        img.style.aspectRatio = '3 / 2';
+    }
     img.src = `/thumb/${file.id}`;
     img.alt = file.filename;
     img.onerror = () => {

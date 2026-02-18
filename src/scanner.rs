@@ -322,6 +322,57 @@ pub fn read_dimensions(path: &Path) -> Option<(i32, i32)> {
     Some((width, height))
 }
 
+/// Fast dimension reading optimized for batch backfill.
+/// - Non-JPEG: single file open, no EXIF parsing (no orientation to worry about)
+/// - JPEG: single file open, reads 64KB buffer for both dimensions and EXIF orientation
+const JPEG_HEADER_BUF_SIZE: u64 = 64 * 1024;
+
+pub fn read_dimensions_fast(path: &Path) -> Option<(i32, i32)> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+
+    match ext.as_str() {
+        "jpg" | "jpeg" => read_jpeg_dimensions_fast(path),
+        _ => {
+            let size = imagesize::size(path).ok()?;
+            Some((size.width as i32, size.height as i32))
+        }
+    }
+}
+
+fn read_jpeg_dimensions_fast(path: &Path) -> Option<(i32, i32)> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::with_capacity(JPEG_HEADER_BUF_SIZE as usize);
+    file.take(JPEG_HEADER_BUF_SIZE).read_to_end(&mut buf).ok()?;
+
+    // Dimensions from buffer (SOF marker is usually within first 64KB)
+    let (mut w, mut h) = match imagesize::blob_size(&buf) {
+        Ok(size) => (size.width as i32, size.height as i32),
+        Err(_) => {
+            // SOF beyond buffer — fall back to full file read
+            let size = imagesize::size(path).ok()?;
+            (size.width as i32, size.height as i32)
+        }
+    };
+
+    // EXIF orientation from the same buffer (APP1 is always near the start)
+    let mut cursor = std::io::Cursor::new(&buf);
+    if let Ok(exif) = exif::Reader::new().read_from_container(&mut cursor) {
+        if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+            if let exif::Value::Short(vals) = &field.value {
+                if let Some(&o) = vals.first() {
+                    if (5..=8).contains(&o) {
+                        std::mem::swap(&mut w, &mut h);
+                    }
+                }
+            }
+        }
+    }
+
+    Some((w, h))
+}
+
 /// Check if a directory entry is hidden (starts with .)
 /// Never considers the root entry (depth 0) as hidden.
 fn is_hidden(entry: &DirEntry) -> bool {

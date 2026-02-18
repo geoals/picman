@@ -2,15 +2,16 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use tracing::{debug, info, instrument, warn};
 
 use crate::db::Database;
 use crate::hash::compute_file_hash;
-use crate::scanner::{detect_orientation, read_dimensions};
+use crate::scanner::{detect_orientation, read_dimensions_fast};
 
 const HASH_BATCH_SIZE: usize = 1000;
-
+const DIMENSION_BATCH_SIZE: usize = 1000;
 const ORIENTATION_BATCH_SIZE: usize = 5000;
 
 /// Detect image orientation and add landscape/portrait tags
@@ -70,24 +71,32 @@ pub(super) fn backfill_dimensions(db: &Database, library_path: &Path) -> Result<
         return Ok(0);
     }
 
-    info!(total, "backfilling dimensions for existing images");
+    let progress = ProgressBar::new(total as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("    {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {elapsed_precise} | {msg}")
+            .unwrap()
+            .progress_chars("██░"),
+    );
+    progress.set_message("reading dimensions");
 
     let mut backfilled = 0usize;
 
-    // Process in a single transaction (header reads are fast, no need for batching)
-    db.begin_transaction()?;
-    for file in &files {
-        let full_path = library_path.join(&file.path);
-        if let Some((w, h)) = read_dimensions(&full_path) {
-            db.set_file_dimensions(file.id, w, h)?;
-            backfilled += 1;
+    // Process in batches for resumability on interrupt
+    for batch in files.chunks(DIMENSION_BATCH_SIZE) {
+        db.begin_transaction()?;
+        for file in batch {
+            let full_path = library_path.join(&file.path);
+            if let Some((w, h)) = read_dimensions_fast(&full_path) {
+                db.set_file_dimensions(file.id, w, h)?;
+                backfilled += 1;
+            }
+            progress.inc(1);
         }
+        db.commit()?;
     }
-    db.commit()?;
 
-    if backfilled > 0 {
-        info!(backfilled, total, "dimension backfill complete");
-    }
+    progress.finish_with_message(format!("{backfilled} dimensions backfilled"));
 
     Ok(backfilled)
 }
