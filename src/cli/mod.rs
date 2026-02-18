@@ -1,5 +1,6 @@
 mod init;
 mod list;
+mod post_process;
 mod previews;
 mod rate;
 mod repair;
