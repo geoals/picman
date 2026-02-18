@@ -142,11 +142,7 @@ fn find_image_in_dir_recursive(state: &AppState, dir_id: i64) -> Option<PathBuf>
 
 /// Get full path to a file
 fn get_file_path(state: &AppState, dir: &Directory, filename: &str) -> PathBuf {
-    if dir.path.is_empty() {
-        state.library_path.join(filename)
-    } else {
-        state.library_path.join(&dir.path).join(filename)
-    }
+    dir.file_path(&state.library_path, filename)
 }
 
 /// Generate dynamic grid composite preview for a directory

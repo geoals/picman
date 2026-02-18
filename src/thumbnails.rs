@@ -608,9 +608,5 @@ fn find_image_in_dir_recursive_standalone(state: &TempPreviewState, dir_id: i64)
 }
 
 fn get_file_path_standalone(state: &TempPreviewState, dir: &Directory, filename: &str) -> PathBuf {
-    if dir.path.is_empty() {
-        state.library_path.join(filename)
-    } else {
-        state.library_path.join(&dir.path).join(filename)
-    }
+    dir.file_path(&state.library_path, filename)
 }

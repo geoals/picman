@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use rusqlite::params;
 
@@ -11,6 +13,26 @@ pub struct Directory {
     pub parent_id: Option<i64>,
     pub rating: Option<i32>,
     pub mtime: Option<i64>,
+}
+
+impl Directory {
+    /// Build the absolute path for a file inside this directory
+    pub fn file_path(&self, library_path: &Path, filename: &str) -> PathBuf {
+        if self.path.is_empty() {
+            library_path.join(filename)
+        } else {
+            library_path.join(&self.path).join(filename)
+        }
+    }
+
+    /// Build the absolute path for this directory itself
+    pub fn full_path(&self, library_path: &Path) -> PathBuf {
+        if self.path.is_empty() {
+            library_path.to_path_buf()
+        } else {
+            library_path.join(&self.path)
+        }
+    }
 }
 
 impl Database {
@@ -270,6 +292,62 @@ mod tests {
         db.delete_directory(child_id).unwrap();
         let children = db.get_child_directories(Some(root_id)).unwrap();
         assert!(children.is_empty());
+    }
+
+    #[test]
+    fn test_file_path_with_nonempty_dir() {
+        let dir = Directory {
+            id: 1,
+            path: "photos/vacation".to_string(),
+            parent_id: None,
+            rating: None,
+            mtime: None,
+        };
+        let lib = std::path::Path::new("/library");
+        let result = dir.file_path(lib, "img.jpg");
+        assert_eq!(result, std::path::PathBuf::from("/library/photos/vacation/img.jpg"));
+    }
+
+    #[test]
+    fn test_file_path_with_empty_dir() {
+        let dir = Directory {
+            id: 1,
+            path: String::new(),
+            parent_id: None,
+            rating: None,
+            mtime: None,
+        };
+        let lib = std::path::Path::new("/library");
+        let result = dir.file_path(lib, "img.jpg");
+        assert_eq!(result, std::path::PathBuf::from("/library/img.jpg"));
+    }
+
+    #[test]
+    fn test_full_path_with_nonempty_dir() {
+        let dir = Directory {
+            id: 1,
+            path: "photos".to_string(),
+            parent_id: None,
+            rating: None,
+            mtime: None,
+        };
+        let lib = std::path::Path::new("/library");
+        let result = dir.full_path(lib);
+        assert_eq!(result, std::path::PathBuf::from("/library/photos"));
+    }
+
+    #[test]
+    fn test_full_path_with_empty_dir() {
+        let dir = Directory {
+            id: 1,
+            path: String::new(),
+            parent_id: None,
+            rating: None,
+            mtime: None,
+        };
+        let lib = std::path::Path::new("/library");
+        let result = dir.full_path(lib);
+        assert_eq!(result, std::path::PathBuf::from("/library"));
     }
 
     #[test]

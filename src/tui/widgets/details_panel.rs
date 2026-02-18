@@ -339,11 +339,7 @@ fn compute_missing_thumbnails(state: &AppState, dir: &crate::db::Directory) -> b
         Err(_) => return false,
     };
 
-    let dir_path = if dir.path.is_empty() {
-        state.library_path.clone()
-    } else {
-        state.library_path.join(&dir.path)
-    };
+    let dir_path = dir.full_path(&state.library_path);
 
     // Check first media file only (quick check)
     for file in &files {
