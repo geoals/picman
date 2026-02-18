@@ -203,262 +203,236 @@ enum KeyAction {
     Cancelling, // Waiting for background operation to cancel
 }
 
+/// Deferred action from filter dialog key handling (two-pass borrow-checker pattern)
+enum FilterAction {
+    None,
+    AutoApply,
+    Apply,
+    Clear,
+}
+
 /// Handle a key press. Returns KeyAction indicating what to do next.
 fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
     // Handle filter dialog if active
     if state.filter_dialog.is_some() {
-        use super::state::FilterDialogFocus;
-        let focus = state.filter_dialog_focus();
+        use super::dialogs::FilterDialogFocus;
+        let mut action = FilterAction::None;
 
-        match code {
-            KeyCode::Esc => {
-                let tag_editing = focus == Some(FilterDialogFocus::Tag)
-                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
-                if tag_editing {
-                    // Exit tag editing mode — keep input text so user can
-                    // navigate the filtered list with j/k
-                    if let Some(ref mut dialog) = state.filter_dialog {
+        // First pass: mutate the dialog directly
+        if let Some(ref mut dialog) = state.filter_dialog {
+            let focus = dialog.focus;
+            let tag_editing = focus == FilterDialogFocus::Tag && dialog.tag_editing;
+
+            match code {
+                KeyCode::Esc => {
+                    if tag_editing {
                         dialog.tag_editing = false;
+                    } else {
+                        action = FilterAction::Apply;
                     }
-                } else {
-                    state.apply_filter()?;
                 }
-            }
-            KeyCode::Char('m') => {
-                let tag_editing = focus == Some(FilterDialogFocus::Tag)
-                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
-                if tag_editing {
-                    state.filter_dialog_char('m');
-                } else {
-                    state.apply_filter()?;
-                }
-            }
-            KeyCode::Tab => state.filter_dialog_focus_down(),
-            KeyCode::BackTab => state.filter_dialog_focus_up(),
-            KeyCode::Up => {
-                if focus == Some(FilterDialogFocus::Tag) {
-                    state.filter_dialog_up();
-                } else {
-                    state.filter_dialog_focus_up();
-                }
-            }
-            KeyCode::Down => {
-                if focus == Some(FilterDialogFocus::Tag) {
-                    state.filter_dialog_down();
-                } else {
-                    state.filter_dialog_focus_down();
-                }
-            }
-            KeyCode::Left => {
-                state.filter_dialog_left();
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Right => {
-                state.filter_dialog_right();
-                state.auto_apply_filter()?;
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                match focus {
-                    Some(FilterDialogFocus::VideoOnly) => {
-                        state.filter_dialog_toggle_video();
-                        state.auto_apply_filter()?;
+                KeyCode::Char('m') => {
+                    if tag_editing {
+                        dialog.char_input('m');
+                    } else {
+                        action = FilterAction::Apply;
                     }
-                    Some(FilterDialogFocus::Tag) => {
-                        let editing = state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
-                        let on_input = state.filter_dialog.as_ref().is_some_and(|d| d.tag_input_selected);
-                        if editing {
-                            let has_match = state.filter_dialog.as_ref()
-                                .is_some_and(|d| !d.filtered_tags.is_empty());
-                            if has_match {
-                                // Add the highlighted autocomplete match
-                                state.filter_dialog_add_tag();
-                                state.auto_apply_filter()?;
-                            } else {
-                                // No matches (or empty input): exit editing mode
-                                if let Some(ref mut dialog) = state.filter_dialog {
+                }
+                KeyCode::Tab => dialog.cycle_focus_down(),
+                KeyCode::BackTab => dialog.cycle_focus_up(),
+                KeyCode::Up => {
+                    if focus == FilterDialogFocus::Tag {
+                        dialog.navigate_up();
+                    } else {
+                        dialog.cycle_focus_up();
+                    }
+                }
+                KeyCode::Down => {
+                    if focus == FilterDialogFocus::Tag {
+                        dialog.navigate_down();
+                    } else {
+                        dialog.cycle_focus_down();
+                    }
+                }
+                KeyCode::Left => {
+                    dialog.navigate_rating_left();
+                    action = FilterAction::AutoApply;
+                }
+                KeyCode::Right => {
+                    dialog.navigate_rating_right();
+                    action = FilterAction::AutoApply;
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    match focus {
+                        FilterDialogFocus::VideoOnly => {
+                            dialog.toggle_video();
+                            action = FilterAction::AutoApply;
+                        }
+                        FilterDialogFocus::Tag => {
+                            if tag_editing {
+                                if !dialog.filtered_tags.is_empty() {
+                                    dialog.add_tag();
+                                    action = FilterAction::AutoApply;
+                                } else {
                                     dialog.tag_editing = false;
                                 }
-                            }
-                        } else if on_input {
-                            // On input line: Enter starts editing mode
-                            if let Some(ref mut dialog) = state.filter_dialog {
+                            } else if dialog.tag_input_selected {
                                 dialog.tag_editing = true;
+                            } else {
+                                dialog.add_tag();
+                                action = FilterAction::AutoApply;
                             }
-                        } else {
-                            // On a tag in the list: Enter adds that tag
-                            state.filter_dialog_add_tag();
-                            state.auto_apply_filter()?;
                         }
+                        FilterDialogFocus::Rating => {}
                     }
-                    _ => {}
                 }
-            }
-            KeyCode::Backspace => {
-                let tag_editing = focus == Some(FilterDialogFocus::Tag)
-                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
-                if tag_editing {
-                    // Check if input is empty — if so, exit editing mode
-                    let input_empty = state.filter_dialog.as_ref().is_some_and(|d| d.tag_input.is_empty());
-                    if input_empty {
-                        if let Some(ref mut dialog) = state.filter_dialog {
+                KeyCode::Backspace => {
+                    if tag_editing {
+                        if dialog.tag_input.is_empty() {
                             dialog.tag_editing = false;
+                        } else {
+                            dialog.backspace();
+                            action = FilterAction::AutoApply;
                         }
                     } else {
-                        state.filter_dialog_backspace();
-                        state.auto_apply_filter()?;
+                        dialog.backspace();
+                        action = FilterAction::AutoApply;
                     }
-                } else {
-                    // Not editing tags: backspace removes last selected tag
-                    state.filter_dialog_backspace();
-                    state.auto_apply_filter()?;
                 }
-            }
-            KeyCode::Char(c) => {
-                // When editing tag input, all chars go to tag input
-                let tag_editing = focus == Some(FilterDialogFocus::Tag)
-                    && state.filter_dialog.as_ref().is_some_and(|d| d.tag_editing);
-                if tag_editing {
-                    state.filter_dialog_char(c);
-                } else {
-                    // Navigation and shortcuts when not editing tags
-                    match c {
-                        'i' => {
-                            // Enter editing mode on the tag input line
-                            let on_input = focus == Some(FilterDialogFocus::Tag)
-                                && state.filter_dialog.as_ref().is_some_and(|d| d.tag_input_selected);
-                            if on_input {
-                                if let Some(ref mut dialog) = state.filter_dialog {
+                KeyCode::Char(c) => {
+                    if tag_editing {
+                        dialog.char_input(c);
+                    } else {
+                        match c {
+                            'i' => {
+                                if focus == FilterDialogFocus::Tag && dialog.tag_input_selected {
                                     dialog.tag_editing = true;
                                 }
                             }
-                        }
-                        'j' => {
-                            if focus == Some(FilterDialogFocus::Tag) {
-                                state.filter_dialog_down();
-                            } else {
-                                state.filter_dialog_focus_down();
+                            'j' => {
+                                if focus == FilterDialogFocus::Tag {
+                                    dialog.navigate_down();
+                                } else {
+                                    dialog.cycle_focus_down();
+                                }
                             }
-                        }
-                        'k' => {
-                            if focus == Some(FilterDialogFocus::Tag) {
-                                state.filter_dialog_up();
-                            } else {
-                                state.filter_dialog_focus_up();
+                            'k' => {
+                                if focus == FilterDialogFocus::Tag {
+                                    dialog.navigate_up();
+                                } else {
+                                    dialog.cycle_focus_up();
+                                }
                             }
+                            'h' => {
+                                dialog.navigate_rating_left();
+                                action = FilterAction::AutoApply;
+                            }
+                            'l' => {
+                                dialog.navigate_rating_right();
+                                action = FilterAction::AutoApply;
+                            }
+                            '0' => action = FilterAction::Clear,
+                            '1' | 'a' => {
+                                dialog.set_rating(1);
+                                action = FilterAction::AutoApply;
+                            }
+                            '2' | 's' => {
+                                dialog.set_rating(2);
+                                action = FilterAction::AutoApply;
+                            }
+                            '3' | 'd' => {
+                                dialog.set_rating(3);
+                                action = FilterAction::AutoApply;
+                            }
+                            '4' | 'f' => {
+                                dialog.set_rating(4);
+                                action = FilterAction::AutoApply;
+                            }
+                            '5' | 'g' => {
+                                dialog.set_rating(5);
+                                action = FilterAction::AutoApply;
+                            }
+                            'v' => {
+                                dialog.toggle_video();
+                                action = FilterAction::AutoApply;
+                            }
+                            'u' => {
+                                dialog.set_unrated();
+                                action = FilterAction::AutoApply;
+                            }
+                            _ => {}
                         }
-                        'h' => {
-                            state.filter_dialog_left();
-                            state.auto_apply_filter()?;
-                        }
-                        'l' => {
-                            state.filter_dialog_right();
-                            state.auto_apply_filter()?;
-                        }
-                        '0' => state.clear_filter()?,
-                        '1' | 'a' => {
-                            state.filter_dialog_set_rating(1);
-                            state.auto_apply_filter()?;
-                        }
-                        '2' | 's' => {
-                            state.filter_dialog_set_rating(2);
-                            state.auto_apply_filter()?;
-                        }
-                        '3' | 'd' => {
-                            state.filter_dialog_set_rating(3);
-                            state.auto_apply_filter()?;
-                        }
-                        '4' | 'f' => {
-                            state.filter_dialog_set_rating(4);
-                            state.auto_apply_filter()?;
-                        }
-                        '5' | 'g' => {
-                            state.filter_dialog_set_rating(5);
-                            state.auto_apply_filter()?;
-                        }
-                        'v' => {
-                            state.filter_dialog_toggle_video();
-                            state.auto_apply_filter()?;
-                        }
-                        'u' => {
-                            state.filter_dialog_set_unrated();
-                            state.auto_apply_filter()?;
-                        }
-                        _ => {}
                     }
                 }
+                _ => {}
             }
-            _ => {}
+        }
+
+        // Second pass: actions that need &mut AppState
+        match action {
+            FilterAction::AutoApply => state.auto_apply_filter()?,
+            FilterAction::Apply => state.apply_filter()?,
+            FilterAction::Clear => state.clear_filter()?,
+            FilterAction::None => {}
         }
         return Ok(KeyAction::Continue);
     }
 
     // Handle tag input popup if active
     if state.tag_input.is_some() {
-        let editing = state.tag_input.as_ref().is_some_and(|t| t.editing);
-        let input_selected = state.tag_input.as_ref().is_some_and(|t| t.input_selected);
+        let mut do_toggle = false;
+        let mut do_close = false;
 
-        if editing {
-            match code {
-                KeyCode::Esc => {
-                    if let Some(ref mut input) = state.tag_input {
-                        input.editing = false;
-                    }
-                }
-                KeyCode::Enter => {
-                    let input_empty = state
-                        .tag_input
-                        .as_ref()
-                        .is_some_and(|t| t.input.is_empty());
-                    if input_empty {
-                        // Empty input: exit editing mode
-                        if let Some(ref mut input) = state.tag_input {
+        // First pass: mutate the dialog directly
+        if let Some(ref mut input) = state.tag_input {
+            if input.editing {
+                match code {
+                    KeyCode::Esc => input.editing = false,
+                    KeyCode::Enter => {
+                        if input.input.is_empty() {
                             input.editing = false;
+                        } else {
+                            do_toggle = true;
                         }
-                    } else {
-                        // Non-empty: apply selected match or create new tag
-                        state.toggle_tag()?;
                     }
-                }
-                KeyCode::Backspace => {
-                    let input_empty = state
-                        .tag_input
-                        .as_ref()
-                        .is_some_and(|t| t.input.is_empty());
-                    if input_empty {
-                        if let Some(ref mut input) = state.tag_input {
+                    KeyCode::Backspace => {
+                        if input.input.is_empty() {
                             input.editing = false;
+                        } else {
+                            input.pop_char_and_filter();
                         }
-                    } else {
-                        state.tag_input_backspace();
                     }
+                    KeyCode::Up => input.move_up(),
+                    KeyCode::Down => input.move_down(),
+                    KeyCode::Char(c) => input.push_char_and_filter(c),
+                    _ => {}
                 }
-                KeyCode::Up => state.tag_input_up(),
-                KeyCode::Down => state.tag_input_down(),
-                KeyCode::Char(c) => state.tag_input_char(c),
-                _ => {}
-            }
-        } else {
-            // Browse mode: vim-style navigation
-            match code {
-                KeyCode::Esc => state.close_tag_input(),
-                KeyCode::Char('j') | KeyCode::Down => state.tag_input_down(),
-                KeyCode::Char('k') | KeyCode::Up => state.tag_input_up(),
-                KeyCode::Enter => {
-                    if input_selected {
-                        if let Some(ref mut input) = state.tag_input {
+            } else {
+                // Browse mode: vim-style navigation
+                match code {
+                    KeyCode::Esc => do_close = true,
+                    KeyCode::Char('j') | KeyCode::Down => input.move_down(),
+                    KeyCode::Char('k') | KeyCode::Up => input.move_up(),
+                    KeyCode::Enter => {
+                        if input.input_selected {
                             input.editing = true;
+                        } else {
+                            do_toggle = true;
                         }
-                    } else {
-                        state.toggle_tag()?;
                     }
-                }
-                KeyCode::Char('i') if input_selected => {
-                    if let Some(ref mut input) = state.tag_input {
+                    KeyCode::Char('i') if input.input_selected => {
                         input.editing = true;
                     }
+                    _ => {}
                 }
-                _ => {}
             }
+        }
+
+        // Second pass: actions that need &mut AppState
+        if do_toggle {
+            state.toggle_tag()?;
+        } else if do_close {
+            state.close_tag_input();
         }
         return Ok(KeyAction::Continue);
     }
