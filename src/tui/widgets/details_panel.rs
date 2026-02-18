@@ -7,20 +7,27 @@ use ratatui::{
 };
 
 use crate::tui::colors::{
-    format_rating, HELP_TEXT, IMAGE_INDICATOR, RATING_COLOR, TAG_COLOR, VIDEO_INDICATOR,
+    format_rating, HEADER_COLOR, HELP_TEXT, RATING_COLOR, SUCCESS_COLOR, TAG_COLOR, WARNING_COLOR,
 };
 use crate::tui::state::{AppState, Focus};
 
 use crate::thumbnails::{has_dir_preview, has_thumbnail, is_image_file, is_video_file};
 
 pub fn render_details_panel(frame: &mut Frame, area: Rect, state: &AppState) {
-    let content = match state.focus {
-        Focus::FileList => render_file_details(state),
-        Focus::DirectoryTree => render_directory_details(state),
+    let content = match (&state.focus, state.details_expanded) {
+        (Focus::FileList, true) => render_file_details_expanded(state),
+        (Focus::FileList, false) => render_file_details(state),
+        (Focus::DirectoryTree, _) => render_directory_details(state),
     };
 
+    let title = Line::from(vec![
+        Span::raw(" Details "),
+        Span::styled("[i]", Style::default().fg(HELP_TEXT)),
+        Span::raw(" "),
+    ]);
+
     let panel = Paragraph::new(content)
-        .block(Block::default().borders(Borders::ALL).title(" Details "));
+        .block(Block::default().borders(Borders::ALL).title(title));
 
     frame.render_widget(panel, area);
 }
@@ -39,16 +46,11 @@ fn render_file_details(state: &AppState) -> Text<'static> {
         _ => file.filename.clone(),
     };
 
-    // Format size
+    // Format size with optional dimensions
     let size = format_size(file.size);
-
-    // Format media type with color indicator
-    let media_type_str = file.media_type.as_deref().unwrap_or("unknown");
-    let is_video = media_type_str.starts_with("video/");
-    let media_type_color = if is_video {
-        VIDEO_INDICATOR
-    } else {
-        IMAGE_INDICATOR
+    let size_dims = match (file.width, file.height) {
+        (Some(w), Some(h)) => format!("{}  {}×{}", size, w, h),
+        _ => size,
     };
 
     // Get filesystem metadata for timestamps
@@ -61,35 +63,184 @@ fn render_file_details(state: &AppState) -> Text<'static> {
     // Line 1: path
     let line1 = Line::from(full_path);
 
-    // Line 2: size | type | rating
-    let line2 = Line::from(vec![
-        Span::raw(format!("{} | ", size)),
-        Span::styled(media_type_str.to_string(), Style::default().fg(media_type_color)),
-        Span::raw(" | Rating: "),
+    // Line 2: size + dimensions
+    let line2 = Line::from(size_dims);
+
+    // Line 3: rating
+    let line3 = Line::from(vec![
+        Span::raw("Rating: "),
         Span::styled(format_rating(file.rating), Style::default().fg(RATING_COLOR)),
     ]);
 
-    // Line 3: timestamps
-    let line3 = Line::from(format!("Modified: {}  Created: {}", modified, created));
+    // Line 4: timestamps
+    let line4 = Line::from(format!("Modified: {}  Created: {}", modified, created));
 
-    // Line 4: tags with colors
-    let mut line4_spans: Vec<Span> = vec![Span::raw("Tags: ")];
+    // Line 5: tags with colors
+    let mut line5_spans: Vec<Span> = vec![Span::raw("Tags: ")];
     if file_with_tags.tags.is_empty() {
-        line4_spans.push(Span::styled("none", Style::default().fg(HELP_TEXT)));
+        line5_spans.push(Span::styled("none", Style::default().fg(HELP_TEXT)));
     } else {
         for (i, tag) in file_with_tags.tags.iter().enumerate() {
             if i > 0 {
-                line4_spans.push(Span::raw(" "));
+                line5_spans.push(Span::raw(" "));
             }
-            line4_spans.push(Span::styled(
+            line5_spans.push(Span::styled(
                 format!("#{}", tag),
                 Style::default().fg(TAG_COLOR),
             ));
         }
     }
-    let line4 = Line::from(line4_spans);
+    let line5 = Line::from(line5_spans);
 
-    Text::from(vec![line1, line2, line3, line4])
+    Text::from(vec![line1, line2, line3, line4, line5])
+}
+
+fn render_file_details_expanded(state: &AppState) -> Text<'static> {
+    let Some(file_with_tags) = state.file_list.selected_file() else {
+        return Text::raw("No file selected");
+    };
+
+    let file = &file_with_tags.file;
+    let dir = state.get_selected_directory();
+
+    // Build full path
+    let full_path = match dir {
+        Some(d) if !d.path.is_empty() => format!("{}/{}", d.path, file.filename),
+        _ => file.filename.clone(),
+    };
+
+    let (modified, created) = if let Some(fs_path) = state.selected_file_path() {
+        get_file_timestamps(&fs_path)
+    } else {
+        ("N/A".to_string(), "N/A".to_string())
+    };
+
+    let section = Style::default()
+        .fg(HEADER_COLOR)
+        .add_modifier(Modifier::BOLD);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // === File info section ===
+    lines.push(Line::from(Span::styled("File", section)));
+    lines.push(Line::from(format!("  {}", full_path)));
+
+    // Dimensions
+    if let (Some(w), Some(h)) = (file.width, file.height) {
+        lines.push(Line::from(format!("  {}×{}", w, h)));
+    }
+
+    // Size (formatted + exact bytes)
+    let size_str = format_size(file.size);
+    if file.size >= 1024 {
+        lines.push(Line::from(format!("  {} ({} bytes)", size_str, file.size)));
+    } else {
+        lines.push(Line::from(format!("  {}", size_str)));
+    }
+
+    // Rating
+    lines.push(Line::from(vec![
+        Span::raw("  Rating: "),
+        Span::styled(format_rating(file.rating), Style::default().fg(RATING_COLOR)),
+    ]));
+
+    // Timestamps
+    lines.push(Line::from(vec![
+        Span::raw("  Modified: "),
+        Span::styled(modified, Style::default().fg(WARNING_COLOR)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  Created:  "),
+        Span::styled(created, Style::default().fg(SUCCESS_COLOR)),
+    ]));
+
+    // Hash
+    if let Some(ref hash) = file.hash {
+        lines.push(Line::from(vec![
+            Span::raw("  Hash: "),
+            Span::styled(hash.clone(), Style::default().fg(HELP_TEXT)),
+        ]));
+    }
+
+    // Thumbnail status
+    let has_thumb = state
+        .selected_file_path()
+        .map(|p| has_thumbnail(&p))
+        .unwrap_or(false);
+    lines.push(Line::from(vec![
+        Span::raw("  Thumbnail: "),
+        if has_thumb {
+            Span::styled("✓", Style::default().fg(SUCCESS_COLOR))
+        } else {
+            Span::styled("✗", Style::default().fg(HELP_TEXT))
+        },
+    ]));
+
+    // Tags
+    let mut tag_spans: Vec<Span> = vec![Span::raw("  Tags: ")];
+    if file_with_tags.tags.is_empty() {
+        tag_spans.push(Span::styled("none", Style::default().fg(HELP_TEXT)));
+    } else {
+        for (i, tag) in file_with_tags.tags.iter().enumerate() {
+            if i > 0 {
+                tag_spans.push(Span::raw(" "));
+            }
+            tag_spans.push(Span::styled(
+                format!("#{}", tag),
+                Style::default().fg(TAG_COLOR),
+            ));
+        }
+    }
+    lines.push(Line::from(tag_spans));
+
+    // === EXIF section ===
+    if let Some((ref cached_path, ref exif)) = state.cached_exif {
+        let current_path = state.selected_file_path();
+        let is_current = current_path
+            .as_ref()
+            .map(|p| p == cached_path)
+            .unwrap_or(false);
+
+        if is_current && exif.has_any() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("EXIF", section)));
+
+            if let Some(ref make) = exif.camera_make {
+                if let Some(ref model) = exif.camera_model {
+                    lines.push(Line::from(format!("  {} {}", make, model)));
+                } else {
+                    lines.push(Line::from(format!("  {}", make)));
+                }
+            } else if let Some(ref model) = exif.camera_model {
+                lines.push(Line::from(format!("  {}", model)));
+            }
+
+            if let Some(ref lens) = exif.lens {
+                lines.push(Line::from(format!("  Lens: {}", lens)));
+            }
+
+            // Exposure line: aperture, shutter, ISO, focal length
+            let exposure_parts: Vec<&str> = [
+                exif.aperture.as_deref(),
+                exif.shutter_speed.as_deref(),
+                exif.iso.as_deref(),
+                exif.focal_length.as_deref(),
+            ]
+            .iter()
+            .filter_map(|s| *s)
+            .collect();
+
+            if !exposure_parts.is_empty() {
+                lines.push(Line::from(format!("  {}", exposure_parts.join("  "))));
+            }
+
+            if let (Some(lat), Some(lon)) = (exif.gps_lat, exif.gps_lon) {
+                lines.push(Line::from(format!("  GPS: {:.6}, {:.6}", lat, lon)));
+            }
+        }
+    }
+
+    Text::from(lines)
 }
 
 fn render_directory_details(state: &AppState) -> Text<'static> {

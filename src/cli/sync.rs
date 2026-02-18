@@ -9,7 +9,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::db::Database;
 use crate::hash::compute_file_hash;
-use crate::scanner::{detect_orientation, Scanner};
+use crate::scanner::{detect_orientation, read_dimensions, MediaType, Scanner};
 use crate::thumbnails::{compute_thumbnail_path, compute_video_thumbnail_path, is_image_file, is_video_file};
 
 use super::init::DB_FILENAME;
@@ -26,6 +26,7 @@ pub struct SyncStats {
     pub files_hashed: usize,
     pub hash_errors: usize,
     pub orientation_tagged: usize,
+    pub dimensions_backfilled: usize,
 }
 
 /// Metadata to preserve when a file is moved (as part of directory move)
@@ -85,6 +86,9 @@ fn run_sync_impl(
     } else {
         sync_database(&db, &scanner, &library_path)?
     };
+
+    // Backfill dimensions for existing image files with NULL width/height
+    stats.dimensions_backfilled = backfill_dimensions(&db, &library_path)?;
 
     // Tag orientation for image files (only if requested)
     if tag_orientation_flag {
@@ -148,6 +152,39 @@ fn tag_orientation(db: &Database, library_path: &Path) -> Result<usize> {
     info!(total_tagged, "orientation tagging complete");
 
     Ok(total_tagged)
+}
+
+/// Backfill dimensions for image files with NULL width/height.
+/// Reads only the file header (via imagesize), so it's fast even on HDD.
+#[instrument(skip(db, library_path))]
+fn backfill_dimensions(db: &Database, library_path: &Path) -> Result<usize> {
+    let files = db.get_files_needing_dimensions()?;
+    let total = files.len();
+
+    if total == 0 {
+        return Ok(0);
+    }
+
+    info!(total, "backfilling dimensions for existing images");
+
+    let mut backfilled = 0usize;
+
+    // Process in a single transaction (header reads are fast, no need for batching)
+    db.begin_transaction()?;
+    for file in &files {
+        let full_path = library_path.join(&file.path);
+        if let Some((w, h)) = read_dimensions(&full_path) {
+            db.set_file_dimensions(file.id, w, h)?;
+            backfilled += 1;
+        }
+    }
+    db.commit()?;
+
+    if backfilled > 0 {
+        info!(backfilled, total, "dimension backfill complete");
+    }
+
+    Ok(backfilled)
 }
 
 /// Hash files that have NULL hash values
@@ -410,12 +447,21 @@ fn sync_database_incremental(
                 }
             }
             None => {
-                db.insert_file(
+                let (width, height) = if file.media_type == MediaType::Image {
+                    read_dimensions(&file.path)
+                        .map(|(w, h)| (Some(w), Some(h)))
+                        .unwrap_or((None, None))
+                } else {
+                    (None, None)
+                };
+                db.insert_file_with_dimensions(
                     dir_id,
                     &file.filename,
                     file.size as i64,
                     file.mtime,
                     Some(file.media_type.as_str()),
+                    width,
+                    height,
                 )?;
                 stats.files_added += 1;
             }
@@ -719,12 +765,21 @@ fn sync_database(db: &Database, scanner: &Scanner, library_path: &Path) -> Resul
             }
             None => {
                 // New file
-                let file_id = db.insert_file(
+                let (width, height) = if file.media_type == MediaType::Image {
+                    read_dimensions(&file.path)
+                        .map(|(w, h)| (Some(w), Some(h)))
+                        .unwrap_or((None, None))
+                } else {
+                    (None, None)
+                };
+                let file_id = db.insert_file_with_dimensions(
                     dir_id,
                     &file.filename,
                     file.size as i64,
                     file.mtime,
                     Some(file.media_type.as_str()),
+                    width,
+                    height,
                 )?;
                 stats.files_added += 1;
 
@@ -1228,5 +1283,47 @@ mod tests {
         assert!(root_dir.is_some(), "Root directory should still exist after sync");
         let files = db.get_files_in_directory(root_dir.unwrap().id).unwrap();
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_sync_backfills_dimensions_for_existing_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Create an image with known dimensions
+        fs::create_dir_all(root.join("photos")).unwrap();
+        let img = image::RgbImage::new(200, 100);
+        img.save(root.join("photos/landscape.jpg")).unwrap();
+
+        // Init — this should populate dimensions
+        run_init(root).unwrap();
+
+        // Verify init got the dimensions
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let dir = db.get_directory_by_path("photos").unwrap().unwrap();
+        let files = db.get_files_in_directory(dir.id).unwrap();
+        assert_eq!(files[0].width, Some(200));
+        assert_eq!(files[0].height, Some(100));
+
+        // Now clear them to simulate a pre-migration database
+        db.connection()
+            .execute("UPDATE files SET width = NULL, height = NULL", [])
+            .unwrap();
+        drop(db);
+
+        // Sync should backfill the NULL dimensions
+        let stats = run_sync(root, false, false).unwrap();
+        assert_eq!(stats.dimensions_backfilled, 1);
+
+        // Verify dimensions are populated again
+        let db = Database::open(&root.join(DB_FILENAME)).unwrap();
+        let files = db.get_files_in_directory(dir.id).unwrap();
+        assert_eq!(files[0].width, Some(200));
+        assert_eq!(files[0].height, Some(100));
+
+        // Second sync should not backfill (already populated)
+        drop(db);
+        let stats2 = run_sync(root, false, false).unwrap();
+        assert_eq!(stats2.dimensions_backfilled, 0);
     }
 }

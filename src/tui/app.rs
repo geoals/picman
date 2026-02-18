@@ -193,6 +193,7 @@ fn run_app(
 
         // After draining all keypresses, process deferred updates
         state.load_files_if_dirty()?;
+        state.refresh_exif_cache();
     }
 }
 
@@ -528,6 +529,30 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         return Ok(KeyAction::Continue);
     }
 
+    // Handle search mode
+    if state.search.active {
+        match code {
+            KeyCode::Esc => {
+                state.search.deactivate();
+            }
+            KeyCode::Enter => {
+                state.search.accept();
+            }
+            KeyCode::Backspace => {
+                if state.search.query.is_empty() {
+                    state.search.deactivate();
+                } else {
+                    state.search.pop_char();
+                }
+            }
+            KeyCode::Char(c) => {
+                state.search.push_char(c);
+            }
+            _ => {}
+        }
+        return Ok(KeyAction::Continue);
+    }
+
     // Clear status message on any key
     state.clear_status_message();
 
@@ -557,6 +582,24 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
         KeyCode::Char('o') => state.open_operations_menu(),
         KeyCode::Char('m') => state.open_filter_dialog()?,
         KeyCode::Char('?') => state.toggle_help(),
+        KeyCode::Char('/') => state.search.activate(),
+        KeyCode::Char('i') => {
+            state.details_expanded = !state.details_expanded;
+            if state.details_expanded {
+                // Read EXIF for current file if we don't have it cached
+                if let Some(path) = state.selected_file_path() {
+                    let needs_read = state
+                        .cached_exif
+                        .as_ref()
+                        .map(|(p, _)| p != &path)
+                        .unwrap_or(true);
+                    if needs_read {
+                        let info = crate::tui::exif::read_exif(&path);
+                        state.cached_exif = Some((path, info));
+                    }
+                }
+            }
+        }
         _ => {}
     }
     Ok(KeyAction::Continue)

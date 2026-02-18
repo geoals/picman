@@ -77,7 +77,7 @@ fn compute_tree_prefixes(visible_dirs: &[&Directory], tree: &TreeState) -> Vec<S
 pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let is_focused = state.focus == Focus::DirectoryTree;
 
-    let visible_dirs = state.get_visible_directories();
+    let visible_dirs = state.get_search_visible_directories();
     let tree_prefixes = compute_tree_prefixes(&visible_dirs, &state.tree);
 
     let items: Vec<ListItem> = visible_dirs
@@ -126,12 +126,24 @@ pub fn render_directory_tree(frame: &mut Frame, area: Rect, state: &mut AppState
         Style::default().bg(Color::Gray).fg(Color::Black)
     };
 
+    // Title: show search query when active on tree
+    let title: Line = if state.search.active && is_focused {
+        Line::from(vec![
+            Span::raw(" Directories /"),
+            Span::styled(&state.search.query, Style::default().fg(FOCUS_COLOR)),
+            Span::styled("_", Style::default().fg(FOCUS_COLOR).add_modifier(Modifier::SLOW_BLINK)),
+            Span::raw(" "),
+        ])
+    } else {
+        Line::from(" Directories ")
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title(" Directories "),
+                .title(title),
         )
         .highlight_style(highlight_style);
 

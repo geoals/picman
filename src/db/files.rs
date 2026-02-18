@@ -1,9 +1,25 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, Row};
 
 use super::Database;
+
+/// Map a row to a File struct (columns: id, directory_id, filename, size, mtime, hash, rating, media_type, width, height)
+fn file_from_row(row: &Row) -> rusqlite::Result<File> {
+    Ok(File {
+        id: row.get(0)?,
+        directory_id: row.get(1)?,
+        filename: row.get(2)?,
+        size: row.get(3)?,
+        mtime: row.get(4)?,
+        hash: row.get(5)?,
+        rating: row.get(6)?,
+        media_type: row.get(7)?,
+        width: row.get(8)?,
+        height: row.get(9)?,
+    })
+}
 
 /// Represents a file in the database
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +32,8 @@ pub struct File {
     pub hash: Option<String>,
     pub rating: Option<i32>,
     pub media_type: Option<String>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
 }
 
 /// Represents a file that needs hashing (id + full path)
@@ -42,26 +60,42 @@ impl Database {
         Ok(self.connection().last_insert_rowid())
     }
 
+    /// Insert a new file with optional dimensions, returns its ID
+    pub fn insert_file_with_dimensions(
+        &self,
+        directory_id: i64,
+        filename: &str,
+        size: i64,
+        mtime: i64,
+        media_type: Option<&str>,
+        width: Option<i32>,
+        height: Option<i32>,
+    ) -> Result<i64> {
+        self.connection().execute(
+            "INSERT INTO files (directory_id, filename, size, mtime, media_type, width, height) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![directory_id, filename, size, mtime, media_type, width, height],
+        )?;
+        Ok(self.connection().last_insert_rowid())
+    }
+
+    /// Update file dimensions
+    pub fn set_file_dimensions(&self, id: i64, width: i32, height: i32) -> Result<()> {
+        self.connection().execute(
+            "UPDATE files SET width = ?1, height = ?2 WHERE id = ?3",
+            params![width, height, id],
+        )?;
+        Ok(())
+    }
+
     /// Get a file by directory ID and filename
     pub fn get_file_by_name(&self, directory_id: i64, filename: &str) -> Result<Option<File>> {
         let result = self
             .connection()
             .query_row(
-                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type
+                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
                  FROM files WHERE directory_id = ?1 AND filename = ?2",
                 params![directory_id, filename],
-                |row| {
-                    Ok(File {
-                        id: row.get(0)?,
-                        directory_id: row.get(1)?,
-                        filename: row.get(2)?,
-                        size: row.get(3)?,
-                        mtime: row.get(4)?,
-                        hash: row.get(5)?,
-                        rating: row.get(6)?,
-                        media_type: row.get(7)?,
-                    })
-                },
+                |row| file_from_row(row),
             )
             .optional()?;
         Ok(result)
@@ -70,22 +104,11 @@ impl Database {
     /// Get all files in a directory
     pub fn get_files_in_directory(&self, directory_id: i64) -> Result<Vec<File>> {
         let mut stmt = self.connection().prepare(
-            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type
+            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
              FROM files WHERE directory_id = ?1 ORDER BY filename",
         )?;
 
-        let rows = stmt.query_map([directory_id], |row| {
-            Ok(File {
-                id: row.get(0)?,
-                directory_id: row.get(1)?,
-                filename: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                hash: row.get(5)?,
-                rating: row.get(6)?,
-                media_type: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map([directory_id], |row| file_from_row(row))?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -93,22 +116,11 @@ impl Database {
     /// Get all files in the database
     pub fn get_all_files(&self) -> Result<Vec<File>> {
         let mut stmt = self.connection().prepare(
-            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type
+            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
              FROM files ORDER BY directory_id, filename",
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(File {
-                id: row.get(0)?,
-                directory_id: row.get(1)?,
-                filename: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                hash: row.get(5)?,
-                rating: row.get(6)?,
-                media_type: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map([], |row| file_from_row(row))?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -159,23 +171,12 @@ impl Database {
         let mut duplicates = Vec::new();
         for hash in hashes {
             let mut stmt = self.connection().prepare(
-                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type
+                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
                  FROM files WHERE hash = ?1",
             )?;
 
             let files: Vec<File> = stmt
-                .query_map([&hash], |row| {
-                    Ok(File {
-                        id: row.get(0)?,
-                        directory_id: row.get(1)?,
-                        filename: row.get(2)?,
-                        size: row.get(3)?,
-                        mtime: row.get(4)?,
-                        hash: row.get(5)?,
-                        rating: row.get(6)?,
-                        media_type: row.get(7)?,
-                    })
-                })?
+                .query_map([&hash], |row| file_from_row(row))?
                 .collect::<Result<Vec<_>, _>>()?;
 
             duplicates.push(files);
@@ -208,24 +209,15 @@ impl Database {
     /// Get all files with their directory paths
     pub fn get_all_files_with_paths(&self) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              ORDER BY d.path, f.filename",
         )?;
 
         let rows = stmt.query_map([], |row| {
-            let file = File {
-                id: row.get(0)?,
-                directory_id: row.get(1)?,
-                filename: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                hash: row.get(5)?,
-                rating: row.get(6)?,
-                media_type: row.get(7)?,
-            };
-            let dir_path: String = row.get(8)?;
+            let file = file_from_row(row)?;
+            let dir_path: String = row.get(10)?;
             Ok((file, dir_path))
         })?;
 
@@ -235,7 +227,7 @@ impl Database {
     /// Get files filtered by minimum rating
     pub fn get_files_by_rating(&self, min_rating: i32) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              WHERE f.rating >= ?1
@@ -243,17 +235,8 @@ impl Database {
         )?;
 
         let rows = stmt.query_map([min_rating], |row| {
-            let file = File {
-                id: row.get(0)?,
-                directory_id: row.get(1)?,
-                filename: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                hash: row.get(5)?,
-                rating: row.get(6)?,
-                media_type: row.get(7)?,
-            };
-            let dir_path: String = row.get(8)?;
+            let file = file_from_row(row)?;
+            let dir_path: String = row.get(10)?;
             Ok((file, dir_path))
         })?;
 
@@ -263,7 +246,7 @@ impl Database {
     /// Get files that have a specific tag
     pub fn get_files_by_tag(&self, tag: &str) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              JOIN file_tags ft ON f.id = ft.file_id
@@ -273,17 +256,8 @@ impl Database {
         )?;
 
         let rows = stmt.query_map([tag], |row| {
-            let file = File {
-                id: row.get(0)?,
-                directory_id: row.get(1)?,
-                filename: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                hash: row.get(5)?,
-                rating: row.get(6)?,
-                media_type: row.get(7)?,
-            };
-            let dir_path: String = row.get(8)?;
+            let file = file_from_row(row)?;
+            let dir_path: String = row.get(10)?;
             Ok((file, dir_path))
         })?;
 
@@ -325,6 +299,35 @@ impl Database {
     }
 
     /// Get all files that need hashing (where hash IS NULL)
+    /// Get image files that have NULL width (need dimension reading)
+    pub fn get_files_needing_dimensions(&self) -> Result<Vec<FileToHash>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, d.path, f.filename
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.media_type = 'image' AND f.width IS NULL
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let files: Vec<FileToHash> = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let dir_path: String = row.get(1)?;
+                let filename: String = row.get(2)?;
+
+                let path = if dir_path.is_empty() {
+                    PathBuf::from(filename)
+                } else {
+                    PathBuf::from(format!("{}/{}", dir_path, filename))
+                };
+
+                Ok(FileToHash { id, path })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
     pub fn get_files_needing_hash(&self) -> Result<Vec<FileToHash>> {
         let mut stmt = self.connection().prepare(
             "SELECT f.id, d.path, f.filename
@@ -428,6 +431,23 @@ mod tests {
     }
 
     #[test]
+    fn test_get_files_needing_dimensions() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        // File with dimensions (should NOT need backfill)
+        db.insert_file_with_dimensions(dir_id, "has_dims.jpg", 1024, 0, Some("image"), Some(1920), Some(1080)).unwrap();
+        // File without dimensions (should need backfill)
+        db.insert_file(dir_id, "no_dims.jpg", 1024, 0, Some("image")).unwrap();
+        // Video file without dimensions (should NOT need backfill — only images)
+        db.insert_file(dir_id, "video.mp4", 1024, 0, Some("video")).unwrap();
+
+        let files = db.get_files_needing_dimensions().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].path.to_string_lossy().contains("no_dims.jpg"));
+    }
+
+    #[test]
     fn test_get_files_needing_hash() {
         let db = Database::open_in_memory().unwrap();
         let dir1_id = db.insert_directory("photos", None, None).unwrap();
@@ -491,6 +511,39 @@ mod tests {
         let files = db.get_files_by_rating(3).unwrap();
         assert_eq!(files.len(), 3);
         assert_eq!(files[0].1, "photos");
+    }
+
+    #[test]
+    fn test_insert_file_with_dimensions() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        let file_id = db
+            .insert_file_with_dimensions(dir_id, "photo.jpg", 1024, 12345, Some("image"), Some(1920), Some(1080))
+            .unwrap();
+
+        let file = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
+        assert_eq!(file.width, Some(1920));
+        assert_eq!(file.height, Some(1080));
+
+        // Also test set_file_dimensions
+        db.set_file_dimensions(file_id, 3840, 2160).unwrap();
+        let updated = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
+        assert_eq!(updated.width, Some(3840));
+        assert_eq!(updated.height, Some(2160));
+    }
+
+    #[test]
+    fn test_insert_file_without_dimensions() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        // insert_file (no dimensions) should leave width/height as NULL
+        db.insert_file(dir_id, "photo.jpg", 1024, 12345, Some("image")).unwrap();
+
+        let file = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
+        assert_eq!(file.width, None);
+        assert_eq!(file.height, None);
     }
 
     #[test]

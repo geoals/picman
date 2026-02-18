@@ -57,6 +57,15 @@
 - [x] `--check` flag for thumbnails and previews commands
 - [x] Tracing infrastructure for debugging
 
+### Phase 4.8: Details & Search
+- [x] Empty directory guard (no focus switch to empty file list)
+- [x] Thumbnail indicator in file list (`*` marker)
+- [x] Image dimensions stored in database (header-only read via `imagesize`)
+- [x] Database migration system (`PRAGMA user_version`)
+- [x] Compact details panel reformat (one item per line, dimensions display)
+- [x] Expanded details panel (`i` key) with EXIF data (camera, lens, exposure, GPS)
+- [x] Incremental search (`/` key, LazyVim-style) for directories and files
+
 ## Planned (Core)
 
 ### Phase 5: Culling Workflow

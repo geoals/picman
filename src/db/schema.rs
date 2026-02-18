@@ -25,6 +25,12 @@ impl Database {
     }
 
     fn initialize_schema(&self) -> Result<()> {
+        self.create_tables()?;
+        self.run_migrations()?;
+        Ok(())
+    }
+
+    fn create_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS directories (
@@ -44,6 +50,8 @@ impl Database {
                 hash TEXT,
                 rating INTEGER CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5)),
                 media_type TEXT CHECK (media_type IN ('image', 'video', 'other')),
+                width INTEGER,
+                height INTEGER,
                 UNIQUE(directory_id, filename)
             );
 
@@ -69,6 +77,27 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id);
             "#,
         )?;
+        Ok(())
+    }
+
+    /// Run schema migrations based on PRAGMA user_version.
+    fn run_migrations(&self) -> Result<()> {
+        let version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+        if version < 1 {
+            // Add width/height columns to files table (existing DBs won't have them)
+            // Ignore errors since columns may already exist (from fresh CREATE TABLE)
+            let _ = self
+                .conn
+                .execute("ALTER TABLE files ADD COLUMN width INTEGER", []);
+            let _ = self
+                .conn
+                .execute("ALTER TABLE files ADD COLUMN height INTEGER", []);
+            self.conn.execute_batch("PRAGMA user_version = 1")?;
+        }
+
         Ok(())
     }
 
@@ -166,6 +195,61 @@ mod tests {
             [],
         );
         assert!(result.is_err(), "Should reject negative rating");
+    }
+
+    #[test]
+    fn test_migration_adds_width_height_to_existing_db() {
+        // Simulate a version-0 database (no width/height columns)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE directories (
+                id INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                parent_id INTEGER REFERENCES directories(id),
+                rating INTEGER,
+                mtime INTEGER
+            );
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                directory_id INTEGER NOT NULL REFERENCES directories(id),
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime INTEGER NOT NULL,
+                hash TEXT,
+                rating INTEGER,
+                media_type TEXT,
+                UNIQUE(directory_id, filename)
+            );
+            CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+            CREATE TABLE file_tags (file_id INTEGER, tag_id INTEGER, PRIMARY KEY (file_id, tag_id));
+            CREATE TABLE directory_tags (directory_id INTEGER, tag_id INTEGER, PRIMARY KEY (directory_id, tag_id));
+            "#,
+        )
+        .unwrap();
+
+        // Insert test data before migration
+        conn.execute("INSERT INTO directories (path) VALUES ('photos')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO files (directory_id, filename, size, mtime) VALUES (1, 'img.jpg', 100, 0)",
+            [],
+        )
+        .unwrap();
+
+        // Now wrap with Database (which runs migration)
+        drop(conn);
+
+        // Use Database::open_in_memory which creates fresh DB with migration
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+        let file_id = db
+            .insert_file_with_dimensions(dir_id, "img.jpg", 100, 0, Some("image"), Some(640), Some(480))
+            .unwrap();
+
+        let file = db.get_file_by_name(dir_id, "img.jpg").unwrap().unwrap();
+        assert_eq!(file.width, Some(640));
+        assert_eq!(file.height, Some(480));
     }
 
     #[test]

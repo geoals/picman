@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use tracing::{debug, info, instrument};
 
 use crate::db::Database;
-use crate::scanner::Scanner;
+use crate::scanner::{MediaType, Scanner, read_dimensions};
 
 /// Database filename stored in the library root
 pub const DB_FILENAME: &str = ".picman.db";
@@ -82,19 +82,30 @@ fn populate_database(db: &Database, scanner: &Scanner) -> Result<InitStats> {
             id
         };
 
-        db.insert_file(
+        // Read dimensions for image files (header-only, fast)
+        let (width, height) = if file.media_type == MediaType::Image {
+            read_dimensions(&file.path)
+                .map(|(w, h)| (Some(w), Some(h)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        db.insert_file_with_dimensions(
             dir_id,
             &file.filename,
             file.size as i64,
             file.mtime,
             Some(file.media_type.as_str()),
+            width,
+            height,
         )?;
 
         stats.files += 1;
         match file.media_type {
-            crate::scanner::MediaType::Image => stats.images += 1,
-            crate::scanner::MediaType::Video => stats.videos += 1,
-            crate::scanner::MediaType::Other => {}
+            MediaType::Image => stats.images += 1,
+            MediaType::Video => stats.videos += 1,
+            MediaType::Other => {}
         }
     }
     info!(

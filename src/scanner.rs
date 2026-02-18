@@ -306,6 +306,22 @@ pub fn detect_orientation(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Read image dimensions from file header, accounting for EXIF rotation.
+/// Returns (width, height) or None if the format is unsupported or the file is unreadable.
+pub fn read_dimensions(path: &Path) -> Option<(i32, i32)> {
+    let size = imagesize::size(path).ok()?;
+    let (mut width, mut height) = (size.width as i32, size.height as i32);
+
+    // EXIF orientations 5-8 involve 90° rotation, swapping dimensions
+    if let Some(orientation) = get_exif_orientation(path) {
+        if (5..=8).contains(&orientation) {
+            std::mem::swap(&mut width, &mut height);
+        }
+    }
+
+    Some((width, height))
+}
+
 /// Check if a directory entry is hidden (starts with .)
 /// Never considers the root entry (depth 0) as hidden.
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -519,6 +535,23 @@ mod tests {
         assert!(filenames.contains(&"beach.jpg"));
         assert!(filenames.contains(&"clip.mp4"));
         assert!(!filenames.contains(&"doc.txt"));
+    }
+
+    #[test]
+    fn test_read_dimensions_landscape_image() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("photo.jpg");
+        let img = image::RgbImage::new(1920, 1080);
+        img.save(&path).unwrap();
+
+        let dims = read_dimensions(&path);
+        assert_eq!(dims, Some((1920, 1080)));
+    }
+
+    #[test]
+    fn test_read_dimensions_nonexistent_file() {
+        let dims = read_dimensions(Path::new("/nonexistent/file.jpg"));
+        assert_eq!(dims, None);
     }
 
     #[test]

@@ -34,9 +34,14 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     let preview_area = content_chunks[1];
 
     // Split left section: tree+files area | details panel
+    let details_constraint = if state.details_expanded {
+        Constraint::Percentage(50)
+    } else {
+        Constraint::Length(8)
+    };
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(7)])
+        .constraints([Constraint::Min(0), details_constraint])
         .split(left_section);
 
     let tree_files_area = left_chunks[0];
@@ -223,6 +228,8 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         key_line("r", "Rename directory", 10),
         key_line("o", "Operations menu", 10),
         key_line("m", "Filter", 10),
+        key_line("i", "Toggle details", 10),
+        key_line("/", "Search", 10),
         key_line("?", "Toggle help", 10),
         key_line("q", "Quit", 10),
         Line::from(""),
@@ -233,7 +240,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     ];
 
     let help_width = 60;
-    let help_height = 27;
+    let help_height = 29;
     let x = (area.width.saturating_sub(help_width)) / 2;
     let y = (area.height.saturating_sub(help_height)) / 2;
 

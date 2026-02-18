@@ -23,6 +23,8 @@ picman /path/to/library
 | `r` | Rename directory (with word suggestions from subdirs) |
 | `o` | Operations menu (thumbnails, orientation, hash, dir previews) |
 | `m` | Filter by rating/tags |
+| `i` | Toggle expanded details panel (EXIF, hash, timestamps) |
+| `/` | Search/filter items in focused panel |
 | `?` | Toggle help overlay |
 | `q` | Quit (or cancel background operation) |
 
@@ -37,7 +39,7 @@ picman /path/to/library
 ### File Actions
 
 - **Enter on file**: Opens file with default system viewer (`xdg-open` on Linux, `open` on macOS)
-- **Enter on directory**: Expands directory or moves to file list
+- **Enter on directory**: Expands directory or moves to file list (empty directories stay on tree with a status message)
 
 ### Preview & Thumbnails
 
@@ -121,6 +123,36 @@ When renaming (`r`, only works when directory is selected):
 - `Esc` to cancel
 
 The rename updates both the filesystem and database, preserving the directory ID so cached previews continue to work.
+
+### Search
+
+Press `/` to start an incremental search. The search filters items in the currently focused panel:
+
+- **Directory tree focused**: Filters directories by name, keeping ancestor directories for tree structure
+- **File list focused**: Filters files by filename
+
+**While searching:**
+- Type characters to narrow the search
+- `Backspace` to delete last character (or cancel if empty)
+- `Enter` to accept — exits search input but keeps the filter active
+- `Esc` to cancel — clears the search and shows all items
+
+The search query appears in the panel title (e.g., `Files /query_`). When a filter is accepted, the title shows filtered/total counts (e.g., `Files (12/42)`).
+
+### Details Panel
+
+The details panel shows metadata for the selected file or directory.
+
+**Compact mode** (default): Shows path, size with dimensions, rating, timestamps, and tags. Files with cached thumbnails show a `*` indicator in the file list size column.
+
+**Expanded mode** (press `i`): Takes 50% of the left section and shows additional information:
+- Full file path, dimensions, size (formatted + exact bytes)
+- Rating, modification/creation timestamps
+- File hash (if computed) and thumbnail status
+- Tags
+- EXIF data: camera make/model, lens, aperture, shutter speed, ISO, focal length, GPS coordinates
+
+EXIF data is read from the file header on demand and cached — it only re-reads when the selection changes.
 
 ## CLI Commands
 

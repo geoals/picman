@@ -387,6 +387,59 @@ impl TagInputState {
     }
 }
 
+/// State for incremental search (LazyVim-style `/` search)
+pub struct SearchState {
+    pub query: String,
+    pub active: bool,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            active: false,
+        }
+    }
+}
+
+impl SearchState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn activate(&mut self) {
+        self.active = true;
+        self.query.clear();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.active = false;
+        self.query.clear();
+    }
+
+    /// Accept the current search: deactivate input but keep the query as filter
+    pub fn accept(&mut self) {
+        self.active = false;
+        // Don't clear query — it stays as a filter until next search
+    }
+
+    pub fn push_char(&mut self, c: char) {
+        self.query.push(c);
+    }
+
+    pub fn pop_char(&mut self) {
+        self.query.pop();
+    }
+
+    /// Case-insensitive substring match. Empty query matches everything.
+    pub fn matches(&self, text: &str) -> bool {
+        if self.query.is_empty() {
+            return true;
+        }
+        text.to_lowercase().contains(&self.query.to_lowercase())
+    }
+}
+
 /// State for operations menu popup
 pub struct OperationsMenuState {
     pub directory_path: String,
@@ -397,6 +450,59 @@ pub struct OperationsMenuState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== SearchState Tests ====================
+
+    #[test]
+    fn test_search_empty_query_matches_everything() {
+        let search = SearchState::new();
+        assert!(search.matches("anything"));
+        assert!(search.matches(""));
+    }
+
+    #[test]
+    fn test_search_case_insensitive_substring() {
+        let mut search = SearchState::new();
+        search.query = "beach".to_string();
+        assert!(search.matches("Beach Party"));
+        assert!(search.matches("BEACH"));
+        assert!(search.matches("the beach"));
+        assert!(!search.matches("shore"));
+    }
+
+    #[test]
+    fn test_search_activate_deactivate() {
+        let mut search = SearchState::new();
+        assert!(!search.active);
+
+        search.activate();
+        assert!(search.active);
+        assert!(search.query.is_empty());
+
+        search.push_char('a');
+        search.push_char('b');
+        assert_eq!(search.query, "ab");
+
+        search.pop_char();
+        assert_eq!(search.query, "a");
+
+        search.deactivate();
+        assert!(!search.active);
+        assert!(search.query.is_empty());
+    }
+
+    #[test]
+    fn test_search_accept_keeps_filter() {
+        let mut search = SearchState::new();
+        search.activate();
+        search.push_char('f');
+        search.push_char('o');
+        search.push_char('o');
+        search.accept();
+
+        assert!(!search.active);
+        assert_eq!(search.query, "foo"); // Query preserved as filter
+    }
 
     // ==================== RenameDialogState Tests ====================
 

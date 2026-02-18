@@ -1,6 +1,7 @@
 mod app;
 pub mod colors;
 pub mod dialogs;
+pub mod exif;
 mod mouse;
 mod operations;
 pub mod preview_cache;

@@ -14,7 +14,7 @@ use crate::tui::preview_loader::PreviewLoader;
 // Re-export dialog types so existing `use crate::tui::state::X` paths keep working
 pub use super::dialogs::{
     FilterCriteria, FilterDialogFocus, FilterDialogState, OperationsMenuState, RatingFilter,
-    RenameDialogState, TagInputState,
+    RenameDialogState, SearchState, TagInputState,
 };
 pub use super::operations::{BackgroundProgress, OperationType};
 pub use super::preview_cache::LruPreviewCache;
@@ -202,6 +202,12 @@ pub struct AppState {
     /// as a fallback reference during rapid navigation (skip_preview) so we know
     /// which cached protocol to keep showing.
     pub render_protocol: RefCell<Option<PathBuf>>,
+    /// Incremental search state (/ key)
+    pub search: SearchState,
+    /// Whether the details panel is expanded (toggled with `i`)
+    pub details_expanded: bool,
+    /// Cached EXIF data for the current file (avoids re-reading on every frame)
+    pub cached_exif: Option<(PathBuf, super::exif::ExifInfo)>,
 }
 
 impl AppState {
@@ -236,6 +242,9 @@ impl AppState {
             tree_area: Rect::default(),
             file_list_area: Rect::default(),
             render_protocol: RefCell::new(None),
+            search: SearchState::new(),
+            details_expanded: false,
+            cached_exif: None,
         };
 
         // Load files for initial selection
@@ -561,11 +570,9 @@ impl AppState {
                     let has_children = self.tree.has_visible_children(dir.id, &self.matching_dir_ids);
                     if has_children && !self.tree.expanded.contains(&dir.id) {
                         self.tree.expanded.insert(dir.id);
-                    } else {
+                    } else if !self.file_list.files.is_empty() {
                         self.focus = Focus::FileList;
                     }
-                } else {
-                    self.focus = Focus::FileList;
                 }
             }
             Focus::FileList => {
@@ -598,7 +605,11 @@ impl AppState {
                     } else {
                         // Leaf directory - load files and move to file list
                         self.load_files_for_selected_directory()?;
-                        self.focus = Focus::FileList;
+                        if self.file_list.files.is_empty() {
+                            self.status_message = Some("No files in directory".to_string());
+                        } else {
+                            self.focus = Focus::FileList;
+                        }
                     }
                 }
             }
@@ -1256,6 +1267,98 @@ impl AppState {
         Ok(())
     }
 
+    /// Get visible directories considering both filter and search.
+    /// When search is active on the tree, filters by directory name and keeps ancestors.
+    pub fn get_search_visible_directories(&self) -> Vec<&Directory> {
+        let dirs = self.get_visible_directories();
+        if self.search.query.is_empty() || self.focus != Focus::DirectoryTree {
+            return dirs;
+        }
+
+        // Find IDs of directories whose name matches the search
+        let matching_ids: HashSet<i64> = dirs
+            .iter()
+            .filter(|d| {
+                let name = d.path.rsplit('/').next().unwrap_or(&d.path);
+                self.search.matches(name)
+            })
+            .map(|d| d.id)
+            .collect();
+
+        // Include ancestors of matching directories to preserve tree structure
+        let mut visible_ids = matching_ids.clone();
+        for &id in &matching_ids {
+            let mut current = self
+                .tree
+                .directories
+                .iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.parent_id);
+            while let Some(pid) = current {
+                if !visible_ids.insert(pid) {
+                    break; // Already visited this ancestor
+                }
+                current = self
+                    .tree
+                    .directories
+                    .iter()
+                    .find(|d| d.id == pid)
+                    .and_then(|d| d.parent_id);
+            }
+        }
+
+        dirs.into_iter()
+            .filter(|d| visible_ids.contains(&d.id))
+            .collect()
+    }
+
+    /// Get visible files considering the current search filter
+    pub fn get_visible_files(&self) -> Vec<&FileWithTags> {
+        if self.search.query.is_empty() {
+            self.file_list.files.iter().collect()
+        } else {
+            self.file_list
+                .files
+                .iter()
+                .filter(|f| self.search.matches(&f.file.filename))
+                .collect()
+        }
+    }
+
+    /// Get the display index mapping from visible (search-filtered) indices to underlying file_list indices
+    pub fn visible_file_indices(&self) -> Vec<usize> {
+        if self.search.query.is_empty() {
+            (0..self.file_list.files.len()).collect()
+        } else {
+            self.file_list
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| self.search.matches(&f.file.filename))
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+
+    /// Update EXIF cache if details are expanded and selection changed
+    pub fn refresh_exif_cache(&mut self) {
+        if !self.details_expanded {
+            return;
+        }
+        let Some(path) = self.selected_file_path() else {
+            return;
+        };
+        let needs_read = self
+            .cached_exif
+            .as_ref()
+            .map(|(p, _)| p != &path)
+            .unwrap_or(true);
+        if needs_read {
+            let info = super::exif::read_exif(&path);
+            self.cached_exif = Some((path, info));
+        }
+    }
+
     /// Clear status message
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
@@ -1643,6 +1746,66 @@ let (mut state, _tempdir) = create_test_app_state();
 
         // Popup should close on empty input
         assert!(state.tag_input.is_none());
+    }
+
+    #[test]
+    fn test_select_empty_leaf_directory_stays_on_tree() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let db_path = root.join(".picman.db");
+
+        // Create directory structure: "empty" has no files
+        fs::create_dir_all(root.join("empty")).unwrap();
+        fs::create_dir_all(root.join("photos")).unwrap();
+        fs::write(root.join("photos/img.jpg"), "data").unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        db.insert_directory("empty", None, None).unwrap();
+        db.insert_directory("photos", None, None).unwrap();
+
+        let photos_dir = db.get_directory_by_path("photos").unwrap().unwrap();
+        db.insert_file(photos_dir.id, "img.jpg", 4, 0, Some("image")).unwrap();
+
+        let mut state = AppState::new(root, db).unwrap();
+
+        // Select "empty" (first directory in sorted order)
+        state.tree.selected_index = 0;
+        state.tree.list_state.select(Some(0));
+        state.focus = Focus::DirectoryTree;
+
+        // Enter on a leaf directory with no files should NOT switch to FileList
+        state.select().unwrap();
+        assert_eq!(state.focus, Focus::DirectoryTree, "Focus should stay on tree for empty directory");
+        assert!(state.status_message.is_some(), "Should show a status message for empty directory");
+    }
+
+    #[test]
+    fn test_move_right_empty_directory_stays_on_tree() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let db_path = root.join(".picman.db");
+
+        // Create directory with no files
+        fs::create_dir_all(root.join("empty")).unwrap();
+
+        let db = Database::open(&db_path).unwrap();
+        db.insert_directory("empty", None, None).unwrap();
+
+        let mut state = AppState::new(root, db).unwrap();
+
+        state.tree.selected_index = 0;
+        state.tree.list_state.select(Some(0));
+        state.focus = Focus::DirectoryTree;
+
+        // Expand it first (it has no children, so move_right would try to switch focus)
+        state.move_right();
+        assert_eq!(state.focus, Focus::DirectoryTree, "move_right should not enter empty file list");
     }
 
     #[test]
