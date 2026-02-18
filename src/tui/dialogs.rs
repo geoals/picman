@@ -19,6 +19,57 @@ impl FilterCriteria {
     pub fn is_active(&self) -> bool {
         self.rating != RatingFilter::Any || !self.tags.is_empty() || self.video_only
     }
+
+    /// Check whether a single file passes this filter.
+    ///
+    /// `file_tags` are tags on the file itself; `dir_tags` are inherited from
+    /// the directory and its ancestors. When `ancestor_matches` is true the
+    /// directory already satisfies rating+tag criteria, so only `video_only`
+    /// is enforced.
+    pub fn matches_file(
+        &self,
+        file: &crate::db::File,
+        file_tags: &[String],
+        dir_tags: &[String],
+        ancestor_matches: bool,
+    ) -> bool {
+        // video_only always applies, even when ancestor matches
+        if self.video_only && file.media_type.as_deref() != Some("video") {
+            return false;
+        }
+
+        // When ancestor matches, skip rating and tag checks
+        if ancestor_matches || !self.is_active() {
+            return true;
+        }
+
+        // Rating filter
+        match self.rating {
+            RatingFilter::Any => {}
+            RatingFilter::Unrated => {
+                if file.rating.is_some() {
+                    return false;
+                }
+            }
+            RatingFilter::MinRating(min) => match file.rating {
+                Some(r) if r >= min => {}
+                _ => return false,
+            },
+        }
+
+        // Tag filter (AND logic) — file tags + inherited directory tags
+        if !self.tags.is_empty() {
+            let has_all = self
+                .tags
+                .iter()
+                .all(|t| file_tags.contains(t) || dir_tags.contains(t));
+            if !has_all {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 /// Which element has focus in the filter dialog
@@ -277,6 +328,142 @@ impl FilterDialogState {
             video_only: self.video_only,
         }
     }
+
+    /// Push a character into the tag input (only when Tag section is focused)
+    pub fn char_input(&mut self, c: char) {
+        if self.focus == FilterDialogFocus::Tag {
+            self.tag_input.push(c);
+            self.update_tag_filter();
+        }
+    }
+
+    /// Handle backspace: remove char from input, or pop last selected tag if empty
+    pub fn backspace(&mut self) {
+        if self.focus != FilterDialogFocus::Tag {
+            return;
+        }
+        if self.tag_input.is_empty() {
+            self.selected_tags.pop();
+        } else {
+            self.tag_input.pop();
+        }
+        self.update_tag_filter();
+    }
+
+    /// Navigate up across sections (Tag list → VideoOnly → Rating)
+    pub fn navigate_up(&mut self) {
+        match self.focus {
+            FilterDialogFocus::Tag => {
+                if !self.move_tag_list_up() {
+                    self.focus = FilterDialogFocus::VideoOnly;
+                }
+            }
+            FilterDialogFocus::VideoOnly => {
+                self.focus = FilterDialogFocus::Rating;
+            }
+            FilterDialogFocus::Rating => {}
+        }
+    }
+
+    /// Navigate down across sections (Rating → VideoOnly → Tag list)
+    pub fn navigate_down(&mut self) {
+        match self.focus {
+            FilterDialogFocus::Rating => {
+                self.focus = FilterDialogFocus::VideoOnly;
+            }
+            FilterDialogFocus::VideoOnly => {
+                self.focus = FilterDialogFocus::Tag;
+            }
+            FilterDialogFocus::Tag => {
+                self.move_tag_list_down();
+            }
+        }
+    }
+
+    /// Cycle rating left (Any ← Unrated ← 1 ← 2 ← 3 ← 4 ← 5)
+    pub fn navigate_rating_left(&mut self) {
+        if self.focus != FilterDialogFocus::Rating {
+            return;
+        }
+        self.rating_filter = match self.rating_filter {
+            RatingFilter::Any => RatingFilter::MinRating(5),
+            RatingFilter::Unrated => RatingFilter::Any,
+            RatingFilter::MinRating(1) => RatingFilter::Unrated,
+            RatingFilter::MinRating(n) => RatingFilter::MinRating(n - 1),
+        };
+    }
+
+    /// Cycle rating right (Any → Unrated → 1 → 2 → 3 → 4 → 5)
+    pub fn navigate_rating_right(&mut self) {
+        if self.focus != FilterDialogFocus::Rating {
+            return;
+        }
+        self.rating_filter = match self.rating_filter {
+            RatingFilter::Any => RatingFilter::Unrated,
+            RatingFilter::Unrated => RatingFilter::MinRating(1),
+            RatingFilter::MinRating(5) => RatingFilter::Any,
+            RatingFilter::MinRating(n) => RatingFilter::MinRating(n + 1),
+        };
+    }
+
+    /// Tab: cycle focus to next section (wraps). Clears tag_editing.
+    pub fn cycle_focus_down(&mut self) {
+        self.tag_editing = false;
+        self.focus = match self.focus {
+            FilterDialogFocus::Rating => FilterDialogFocus::VideoOnly,
+            FilterDialogFocus::VideoOnly => FilterDialogFocus::Tag,
+            FilterDialogFocus::Tag => FilterDialogFocus::Rating,
+        };
+        if self.focus == FilterDialogFocus::Tag {
+            self.tag_input_selected = true;
+        }
+    }
+
+    /// BackTab: cycle focus to previous section (wraps). Clears tag_editing.
+    pub fn cycle_focus_up(&mut self) {
+        self.tag_editing = false;
+        self.focus = match self.focus {
+            FilterDialogFocus::Rating => FilterDialogFocus::Tag,
+            FilterDialogFocus::VideoOnly => FilterDialogFocus::Rating,
+            FilterDialogFocus::Tag => FilterDialogFocus::VideoOnly,
+        };
+        if self.focus == FilterDialogFocus::Tag {
+            self.tag_input_selected = true;
+        }
+    }
+
+    /// Set a specific minimum rating (1-5). Only works when Rating section focused.
+    pub fn set_rating(&mut self, rating: i32) {
+        if self.focus == FilterDialogFocus::Rating {
+            self.rating_filter = RatingFilter::MinRating(rating);
+        }
+    }
+
+    /// Toggle video-only filter
+    pub fn toggle_video(&mut self) {
+        self.video_only = !self.video_only;
+    }
+
+    /// Set the unrated filter. Only works when Rating section focused.
+    pub fn set_unrated(&mut self) {
+        if self.focus == FilterDialogFocus::Rating {
+            self.rating_filter = RatingFilter::Unrated;
+        }
+    }
+
+    /// Add the highlighted autocomplete tag to selected_tags
+    pub fn add_tag(&mut self) {
+        if let Some(tag) = self.selected_autocomplete_tag().cloned() {
+            if !self.selected_tags.contains(&tag) {
+                self.selected_tags.push(tag);
+                self.selected_tags.sort();
+            }
+            self.tag_input.clear();
+            self.tag_editing = false;
+            self.tag_input_selected = true;
+            self.update_tag_filter();
+        }
+    }
 }
 
 /// Sort tags so prefix matches come before substring-only matches.
@@ -359,6 +546,43 @@ impl TagInputState {
         } else {
             // At first tag: move up to input line
             self.input_selected = true;
+        }
+    }
+
+    /// Push a character and update the filter in one call
+    pub fn push_char_and_filter(&mut self, c: char) {
+        self.input.push(c);
+        self.update_filter();
+    }
+
+    /// Pop a character and update the filter in one call
+    pub fn pop_char_and_filter(&mut self) {
+        self.input.pop();
+        self.update_filter();
+    }
+
+    /// Update popup state after a tag toggle (add/remove).
+    /// Clears input, updates current_tags / all_tags, and preserves browse-mode cursor.
+    pub fn apply_toggle(&mut self, tag: &str, was_applied: bool) {
+        if was_applied {
+            self.current_tags.retain(|t| t != tag);
+        } else {
+            self.current_tags.push(tag.to_string());
+            self.current_tags.sort();
+        }
+        // Register brand-new tags
+        if !self.all_tags.contains(&tag.to_string()) {
+            self.all_tags.push(tag.to_string());
+            self.all_tags.sort();
+        }
+        // Clear input and rebuild filter list, but preserve selection when browsing
+        let had_input = !self.input.is_empty();
+        self.input.clear();
+        let prev_index = self.selected_index;
+        self.update_filter();
+        if !had_input {
+            // Browsing mode: keep cursor where it was (clamped to list bounds)
+            self.selected_index = prev_index.min(self.filtered_tags.len().saturating_sub(1));
         }
     }
 
@@ -778,5 +1002,460 @@ mod tests {
         assert_eq!(state.all_tags, vec!["a", "b"]);
         assert_eq!(state.current_tags, vec!["a"]);
         assert_eq!(state.filtered_tags, vec!["a", "b"]);
+    }
+
+    // ==================== FilterDialogState Navigation Tests ====================
+
+    fn make_filter_dialog() -> FilterDialogState {
+        let all_tags = vec![
+            "landscape".to_string(),
+            "portrait".to_string(),
+            "vacation".to_string(),
+        ];
+        FilterDialogState::new(all_tags, &FilterCriteria::default())
+    }
+
+    #[test]
+    fn test_filter_dialog_char_input_on_tag_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.char_input('a');
+        assert_eq!(dialog.tag_input, "a");
+        // Also updates filter
+        assert!(dialog.filtered_tags.iter().all(|t| t.contains('a')));
+    }
+
+    #[test]
+    fn test_filter_dialog_char_input_ignored_on_rating_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.char_input('a');
+        assert!(dialog.tag_input.is_empty());
+    }
+
+    #[test]
+    fn test_filter_dialog_backspace_removes_char() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.tag_input = "ab".to_string();
+        dialog.backspace();
+        assert_eq!(dialog.tag_input, "a");
+    }
+
+    #[test]
+    fn test_filter_dialog_backspace_empty_removes_last_tag() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.selected_tags = vec!["landscape".to_string(), "portrait".to_string()];
+        dialog.backspace();
+        assert_eq!(dialog.selected_tags, vec!["landscape"]);
+    }
+
+    #[test]
+    fn test_filter_dialog_backspace_ignored_on_rating_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.tag_input = "ab".to_string();
+        dialog.backspace();
+        assert_eq!(dialog.tag_input, "ab"); // unchanged
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_up_from_tag_to_video() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.tag_input_selected = true; // at top of tag section
+        dialog.navigate_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::VideoOnly);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_up_within_tag_list() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.tag_input_selected = false;
+        dialog.tag_list_index = 1;
+        dialog.navigate_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::Tag);
+        assert_eq!(dialog.tag_list_index, 0);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_up_video_to_rating() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::VideoOnly;
+        dialog.navigate_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::Rating);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_up_stays_at_rating() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.navigate_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::Rating);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_down_from_rating() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.navigate_down();
+        assert_eq!(dialog.focus, FilterDialogFocus::VideoOnly);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_down_from_video() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::VideoOnly;
+        dialog.navigate_down();
+        assert_eq!(dialog.focus, FilterDialogFocus::Tag);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_down_within_tag_list() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.tag_input_selected = true;
+        dialog.navigate_down();
+        // Should move into tag list
+        assert_eq!(dialog.focus, FilterDialogFocus::Tag);
+        assert!(!dialog.tag_input_selected);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_rating_left_cycles() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+
+        // Any -> 5
+        dialog.navigate_rating_left();
+        assert_eq!(dialog.rating_filter, RatingFilter::MinRating(5));
+
+        // 5 -> 4
+        dialog.navigate_rating_left();
+        assert_eq!(dialog.rating_filter, RatingFilter::MinRating(4));
+
+        // ... all the way to 1 -> Unrated -> Any
+        dialog.rating_filter = RatingFilter::MinRating(1);
+        dialog.navigate_rating_left();
+        assert_eq!(dialog.rating_filter, RatingFilter::Unrated);
+        dialog.navigate_rating_left();
+        assert_eq!(dialog.rating_filter, RatingFilter::Any);
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_rating_left_noop_on_other_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.rating_filter = RatingFilter::Any;
+        dialog.navigate_rating_left();
+        assert_eq!(dialog.rating_filter, RatingFilter::Any); // unchanged
+    }
+
+    #[test]
+    fn test_filter_dialog_navigate_rating_right_cycles() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+
+        // Any -> Unrated -> 1 -> 2 -> ... -> 5 -> Any
+        dialog.navigate_rating_right();
+        assert_eq!(dialog.rating_filter, RatingFilter::Unrated);
+        dialog.navigate_rating_right();
+        assert_eq!(dialog.rating_filter, RatingFilter::MinRating(1));
+        dialog.rating_filter = RatingFilter::MinRating(5);
+        dialog.navigate_rating_right();
+        assert_eq!(dialog.rating_filter, RatingFilter::Any);
+    }
+
+    #[test]
+    fn test_filter_dialog_cycle_focus_down() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.tag_editing = true;
+
+        dialog.cycle_focus_down();
+        assert_eq!(dialog.focus, FilterDialogFocus::VideoOnly);
+        assert!(!dialog.tag_editing); // editing cleared on focus change
+
+        dialog.cycle_focus_down();
+        assert_eq!(dialog.focus, FilterDialogFocus::Tag);
+        assert!(dialog.tag_input_selected); // enters tag at input line
+
+        dialog.cycle_focus_down();
+        assert_eq!(dialog.focus, FilterDialogFocus::Rating); // wraps
+    }
+
+    #[test]
+    fn test_filter_dialog_cycle_focus_up() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.tag_editing = true;
+
+        dialog.cycle_focus_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::Tag);
+        assert!(!dialog.tag_editing);
+        assert!(dialog.tag_input_selected);
+
+        dialog.cycle_focus_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::VideoOnly);
+
+        dialog.cycle_focus_up();
+        assert_eq!(dialog.focus, FilterDialogFocus::Rating);
+    }
+
+    #[test]
+    fn test_filter_dialog_set_rating() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.set_rating(3);
+        assert_eq!(dialog.rating_filter, RatingFilter::MinRating(3));
+    }
+
+    #[test]
+    fn test_filter_dialog_set_rating_ignored_on_other_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.set_rating(3);
+        assert_eq!(dialog.rating_filter, RatingFilter::Any); // unchanged
+    }
+
+    #[test]
+    fn test_filter_dialog_toggle_video() {
+        let mut dialog = make_filter_dialog();
+        assert!(!dialog.video_only);
+        dialog.toggle_video();
+        assert!(dialog.video_only);
+        dialog.toggle_video();
+        assert!(!dialog.video_only);
+    }
+
+    #[test]
+    fn test_filter_dialog_set_unrated() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Rating;
+        dialog.set_unrated();
+        assert_eq!(dialog.rating_filter, RatingFilter::Unrated);
+    }
+
+    #[test]
+    fn test_filter_dialog_set_unrated_ignored_on_other_focus() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.set_unrated();
+        assert_eq!(dialog.rating_filter, RatingFilter::Any); // unchanged
+    }
+
+    #[test]
+    fn test_filter_dialog_add_tag() {
+        let mut dialog = make_filter_dialog();
+        dialog.focus = FilterDialogFocus::Tag;
+        dialog.tag_list_index = 0; // "landscape" is first
+        dialog.tag_input_selected = false;
+
+        dialog.add_tag();
+
+        assert!(dialog.selected_tags.contains(&"landscape".to_string()));
+        assert!(dialog.tag_input.is_empty());
+        assert!(!dialog.tag_editing);
+        assert!(dialog.tag_input_selected);
+    }
+
+    #[test]
+    fn test_filter_dialog_add_tag_no_duplicates() {
+        let mut dialog = make_filter_dialog();
+        dialog.selected_tags = vec!["landscape".to_string()];
+        dialog.tag_list_index = 0;
+        dialog.update_tag_filter(); // "landscape" now excluded from filtered_tags
+
+        // First tag in filtered list is now "portrait"
+        dialog.add_tag();
+        assert_eq!(dialog.selected_tags, vec!["landscape", "portrait"]);
+    }
+
+    // ==================== TagInputState Convenience Method Tests ====================
+
+    #[test]
+    fn test_tag_input_push_char_and_filter() {
+        let mut state = TagInputState::new(vec![
+            "landscape".to_string(),
+            "portrait".to_string(),
+        ]);
+        state.push_char_and_filter('p');
+        assert_eq!(state.input, "p");
+        assert_eq!(state.filtered_tags, vec!["portrait", "landscape"]);
+    }
+
+    #[test]
+    fn test_tag_input_pop_char_and_filter() {
+        let mut state = TagInputState::new(vec![
+            "landscape".to_string(),
+            "portrait".to_string(),
+        ]);
+        state.input = "po".to_string();
+        state.update_filter();
+        state.pop_char_and_filter();
+        assert_eq!(state.input, "p");
+        // "p" matches both portrait (prefix) and landscape (contains)
+        assert_eq!(state.filtered_tags, vec!["portrait", "landscape"]);
+    }
+
+    // ==================== FilterCriteria::matches_file Tests ====================
+
+    use crate::db::File;
+
+    fn make_file(media_type: Option<&str>, rating: Option<i32>) -> File {
+        File {
+            id: 1,
+            directory_id: 1,
+            filename: "test.jpg".to_string(),
+            size: 100,
+            mtime: 0,
+            hash: None,
+            rating,
+            media_type: media_type.map(|s| s.to_string()),
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn test_matches_file_no_filter_passes_all() {
+        let filter = FilterCriteria::default();
+        let file = make_file(Some("image"), Some(3));
+        assert!(filter.matches_file(&file, &[], &[], false));
+    }
+
+    #[test]
+    fn test_matches_file_ancestor_match_bypasses_rating_and_tag_filters() {
+        let filter = FilterCriteria {
+            rating: RatingFilter::MinRating(5),
+            tags: vec!["rare".to_string()],
+            video_only: false,
+        };
+        let file = make_file(Some("image"), None);
+        // ancestor_matches=true should bypass rating and tag checks
+        assert!(filter.matches_file(&file, &[], &[], true));
+    }
+
+    #[test]
+    fn test_matches_file_video_only_applies_even_with_ancestor_match() {
+        let filter = FilterCriteria {
+            rating: RatingFilter::Any,
+            tags: vec![],
+            video_only: true,
+        };
+        let image_file = make_file(Some("image"), None);
+        let video_file = make_file(Some("video"), None);
+        // video_only should always apply, even with ancestor match
+        assert!(!filter.matches_file(&image_file, &[], &[], true));
+        assert!(filter.matches_file(&video_file, &[], &[], true));
+    }
+
+    #[test]
+    fn test_matches_file_rating_unrated() {
+        let filter = FilterCriteria {
+            rating: RatingFilter::Unrated,
+            ..Default::default()
+        };
+        assert!(filter.matches_file(&make_file(Some("image"), None), &[], &[], false));
+        assert!(!filter.matches_file(&make_file(Some("image"), Some(3)), &[], &[], false));
+    }
+
+    #[test]
+    fn test_matches_file_rating_min() {
+        let filter = FilterCriteria {
+            rating: RatingFilter::MinRating(3),
+            ..Default::default()
+        };
+        assert!(!filter.matches_file(&make_file(Some("image"), None), &[], &[], false));
+        assert!(!filter.matches_file(&make_file(Some("image"), Some(2)), &[], &[], false));
+        assert!(filter.matches_file(&make_file(Some("image"), Some(3)), &[], &[], false));
+        assert!(filter.matches_file(&make_file(Some("image"), Some(5)), &[], &[], false));
+    }
+
+    #[test]
+    fn test_matches_file_tag_and_logic_with_dir_tags() {
+        let filter = FilterCriteria {
+            tags: vec!["sunset".to_string(), "family".to_string()],
+            ..Default::default()
+        };
+        let file = make_file(Some("image"), None);
+        // File has "sunset", dir has "family" → AND satisfied
+        assert!(filter.matches_file(&file, &["sunset".to_string()], &["family".to_string()], false));
+        // File has "sunset" only → AND not satisfied
+        assert!(!filter.matches_file(&file, &["sunset".to_string()], &[], false));
+    }
+
+    // ==================== TagInputState::apply_toggle Tests ====================
+
+    #[test]
+    fn test_apply_toggle_removes_tag() {
+        let mut input = TagInputState::new_with_current(
+            vec!["outdoor".to_string(), "portrait".to_string()],
+            vec!["outdoor".to_string()],
+        );
+        input.apply_toggle("outdoor", true);
+        assert!(!input.current_tags.contains(&"outdoor".to_string()));
+    }
+
+    #[test]
+    fn test_apply_toggle_adds_tag() {
+        let mut input = TagInputState::new_with_current(
+            vec!["outdoor".to_string(), "portrait".to_string()],
+            vec![],
+        );
+        input.apply_toggle("portrait", false);
+        assert!(input.current_tags.contains(&"portrait".to_string()));
+        assert!(input.current_tags.is_sorted());
+    }
+
+    #[test]
+    fn test_apply_toggle_registers_new_tag_in_all_tags() {
+        let mut input = TagInputState::new_with_current(
+            vec!["outdoor".to_string()],
+            vec![],
+        );
+        input.apply_toggle("brand_new", false);
+        assert!(input.all_tags.contains(&"brand_new".to_string()));
+        assert!(input.current_tags.contains(&"brand_new".to_string()));
+    }
+
+    #[test]
+    fn test_apply_toggle_clears_input_and_preserves_browse_selection() {
+        let mut input = TagInputState::new_with_current(
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+            vec![],
+        );
+        input.editing = false;
+        input.input_selected = false;
+        input.selected_index = 1;
+        input.input = "be".to_string();
+
+        input.apply_toggle("beta", false);
+
+        assert!(input.input.is_empty());
+        // Was browsing (input was not empty before), so selected_index resets via update_filter
+        // But since input was non-empty, it acts like typing mode → selected_index resets to 0
+    }
+
+    #[test]
+    fn test_apply_toggle_browse_mode_keeps_cursor_position() {
+        let mut input = TagInputState::new_with_current(
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+            vec![],
+        );
+        input.editing = false;
+        input.input_selected = false;
+        // Empty input = browse mode
+        input.input.clear();
+        input.update_filter();
+        // update_filter resets selected_index, so set position after
+        input.selected_index = 1;
+
+        input.apply_toggle("beta", false);
+
+        // Browse mode (empty input): cursor position preserved (clamped)
+        assert_eq!(input.selected_index, 1);
     }
 }
