@@ -9,10 +9,24 @@ src/serve/
 ├── mod.rs          — Router setup, AppState, run_serve() entry point
 ├── handlers.rs     — All request handlers + AppError type + spawn_db helper
 ├── models.rs       — JSON request/response structs (serde)
-└── assets/         — Embedded SPA (rust_embed)
-    ├── index.html
-    ├── app.js
-    └── style.css
+└── assets/         — Embedded SPA (rust_embed, no build step)
+    ├── index.html  — Shell HTML, loads app.js as ES module
+    ├── app.js      — Entry point, wires modules together, runs init
+    ├── state.js    — Shared application state object
+    ├── api.js      — HTTP helpers, data fetching (returns data, never renders)
+    ├── tree.js     — Directory tree rendering, navigation, breadcrumb
+    ├── grid.js     — Photo grid, infinite scroll, zoom controls
+    ├── lightbox.js — Full-screen photo viewer
+    ├── tags.js     — Rating stars, directory tag editing, sidebar tag chips
+    ├── filters.js  — Rating/tag filter coordination
+    ├── style.css   — CSS entry point (@import manifest)
+    ├── base.css    — Reset, design tokens, layout shell, loading states, scrollbars
+    ├── sidebar.css — Sidebar container, title, filter controls
+    ├── tree.css    — Directory tree items
+    ├── toolbar.css — Toolbar, breadcrumb, zoom controls, file count
+    ├── grid.css    — Photo grid, masonry columns, cells, overlays
+    ├── tags.css    — Rating stars, tag chips, tag input/autocomplete
+    └── lightbox.css — Full-screen viewer
 ```
 
 ## Architecture
@@ -20,7 +34,7 @@ src/serve/
 - **Runtime**: Builds its own `tokio::runtime::Runtime` in `run_serve()` — called from sync context in `main.rs`
 - **State**: `Arc<AppState>` shared across handlers, containing `Arc<Mutex<Database>>` and `library_path: PathBuf`
 - **DB access**: All database work runs via `spawn_db()` — a helper that calls `tokio::task::spawn_blocking` to avoid blocking the async runtime. Takes a closure `FnOnce(&Database) -> anyhow::Result<T>`
-- **Assets**: SPA files embedded at compile time via `#[derive(Embed)]` on the `Assets` struct. Fallback handler serves `index.html` for SPA routing
+- **Assets**: SPA files embedded at compile time via `#[derive(Embed)]` on the `Assets` struct. Fallback handler serves `index.html` for SPA routing. JS uses native ES modules (`import`/`export`), CSS uses `@import` — no build step needed. The API layer returns data without calling renderers; callers handle rendering after checking the result
 
 ## API Routes
 
