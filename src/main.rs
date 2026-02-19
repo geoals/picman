@@ -46,6 +46,9 @@ enum Commands {
         /// Auto-tag image orientation (landscape/portrait)
         #[arg(long)]
         orientation: bool,
+        /// Full rescan (default is incremental: only scan directories with changed mtime)
+        #[arg(long)]
+        full: bool,
     },
     /// Find duplicate files
     Dupes {
@@ -175,8 +178,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 stats.directories, stats.files, stats.images, stats.videos
             );
         }
-        Some(Commands::Sync { path, hash, orientation }) => {
-            let stats = run_sync(&path, hash, orientation)?;
+        Some(Commands::Sync { path, hash, orientation, full }) => {
+            let stats = run_sync(&path, hash, orientation, full)?;
             println!(
                 "Synced: +{} -{} directories, +{} -{} ~{} files",
                 stats.directories_added,

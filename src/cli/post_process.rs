@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
+use rayon::ThreadPoolBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use tracing::{debug, info, instrument, warn};
@@ -11,6 +12,7 @@ use crate::hash::compute_file_hash;
 use crate::scanner::{detect_orientation, read_dimensions_fast};
 
 const HASH_BATCH_SIZE: usize = 1000;
+const HASH_THREADS: usize = 2;
 const DIMENSION_BATCH_SIZE: usize = 1000;
 const ORIENTATION_BATCH_SIZE: usize = 5000;
 
@@ -115,26 +117,36 @@ pub(super) fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, u
     let mut total_hashed = 0usize;
     let mut total_errors = 0usize;
 
+    // Limited parallelism — enough threads to overlap IO and CPU work,
+    // few enough to avoid seek thrashing on HDD
+    let hash_pool = ThreadPoolBuilder::new()
+        .num_threads(HASH_THREADS)
+        .build()
+        .expect("failed to create hash thread pool");
+
     // Process in batches for resumability
     for (batch_idx, batch) in files_to_hash.chunks(HASH_BATCH_SIZE).enumerate() {
         let batch_start = batch_idx * HASH_BATCH_SIZE;
+
         let hashed_in_batch = AtomicUsize::new(0);
+        let results: Vec<_> = hash_pool.install(|| {
+            batch
+                .par_iter()
+                .map(|file| {
+                    let full_path = library_path.join(&file.path);
+                    let result = compute_file_hash(&full_path);
 
-        // Compute hashes in parallel for this batch
-        let results: Vec<_> = batch
-            .par_iter()
-            .map(|file| {
-                let full_path = library_path.join(&file.path);
-                let result = compute_file_hash(&full_path);
+                    let current =
+                        batch_start + hashed_in_batch.fetch_add(1, Ordering::Relaxed) + 1;
+                    debug!(current, total, "hashing progress");
 
-                let current = batch_start + hashed_in_batch.fetch_add(1, Ordering::Relaxed) + 1;
-                debug!(current, total, "hashing progress");
+                    (file.id, result)
+                })
+                .collect()
+        });
 
-                (file.id, result)
-            })
-            .collect();
-
-        // Write batch to database
+        // Write batch to database in a transaction
+        db.begin_transaction()?;
         for (id, result) in results {
             match result {
                 Ok(hash) => {
@@ -147,6 +159,7 @@ pub(super) fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, u
                 }
             }
         }
+        db.commit()?;
     }
 
     info!(total_hashed, total_errors, "hashing complete");
@@ -192,7 +205,7 @@ mod tests {
         drop(db);
 
         // Sync should backfill the NULL dimensions
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.dimensions_backfilled, 1);
 
         // Verify dimensions are populated again
@@ -203,7 +216,7 @@ mod tests {
 
         // Second sync should not backfill (already populated)
         drop(db);
-        let stats2 = run_sync(root, false, false).unwrap();
+        let stats2 = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats2.dimensions_backfilled, 0);
     }
 
@@ -228,7 +241,7 @@ mod tests {
 
         // Init and sync with orientation tagging
         run_init(root).unwrap();
-        let stats = run_sync(root, false, true).unwrap();
+        let stats = run_sync(root, false, true, true).unwrap();
 
         // Should have tagged 2 files (landscape and portrait, not square)
         assert_eq!(stats.orientation_tagged, 2);
@@ -249,7 +262,7 @@ mod tests {
         }
 
         // Sync again - should not re-tag already tagged files
-        let stats2 = run_sync(root, false, true).unwrap();
+        let stats2 = run_sync(root, false, true, true).unwrap();
         assert_eq!(stats2.orientation_tagged, 0);
     }
 
@@ -267,7 +280,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Sync with hashing
-        let stats = run_sync(root, true, false).unwrap();
+        let stats = run_sync(root, true, false, true).unwrap();
 
         // Should have hashed both files
         assert_eq!(stats.files_hashed, 2);
@@ -299,11 +312,11 @@ mod tests {
 
         // Init and sync with hash
         run_init(root).unwrap();
-        let stats1 = run_sync(root, true, false).unwrap();
+        let stats1 = run_sync(root, true, false, true).unwrap();
         assert_eq!(stats1.files_hashed, 1);
 
         // Sync again - should hash 0 files (already hashed)
-        let stats2 = run_sync(root, true, false).unwrap();
+        let stats2 = run_sync(root, true, false, true).unwrap();
         assert_eq!(stats2.files_hashed, 0);
     }
 
@@ -318,7 +331,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Hash
-        let stats1 = run_sync(root, true, false).unwrap();
+        let stats1 = run_sync(root, true, false, true).unwrap();
         assert_eq!(stats1.files_hashed, 1);
 
         // Get original hash
@@ -333,7 +346,7 @@ mod tests {
         fs::write(root.join("photos/image.jpg"), "modified content").unwrap();
 
         // Sync (detects modification, clears hash)
-        let stats2 = run_sync(root, true, false).unwrap();
+        let stats2 = run_sync(root, true, false, true).unwrap();
         assert_eq!(stats2.files_modified, 1);
         assert_eq!(stats2.files_hashed, 1); // Should rehash modified file
 

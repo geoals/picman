@@ -168,7 +168,10 @@ Sync database with filesystem changes.
 picman sync /path/to/library
 picman sync /path/to/library --hash         # also compute file hashes
 picman sync /path/to/library --orientation  # tag images as landscape/portrait
+picman sync /path/to/library --full         # full rescan (default is incremental)
 ```
+
+By default, sync is **incremental**: only directories with changed mtime are scanned for file changes. Use `--full` to force a complete rescan of all files.
 
 The `--orientation` flag tags images based on dimensions (EXIF-aware). Square images are not tagged. You can also use the TUI operations menu (`o`) to tag orientation interactively.
 

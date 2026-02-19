@@ -44,18 +44,19 @@ struct DirectoryMetadata {
     old_path: String,
 }
 
-/// Run the sync command: update database to match filesystem
+/// Run the sync command: update database to match filesystem.
 ///
-/// If `incremental` is true, only scans files in directories whose mtime changed.
-/// This is much faster for large libraries on slow storage (HDD).
-pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag: bool) -> Result<SyncStats> {
-    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, false)
+/// Defaults to incremental sync (only scans files in directories whose mtime changed),
+/// which is much faster for large libraries on slow storage (HDD).
+/// Pass `full: true` to force a complete rescan of all files.
+pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag: bool, full: bool) -> Result<SyncStats> {
+    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, !full)
 }
 
 /// Run an incremental sync - only scan files in changed directories.
-/// Much faster than full sync on HDD.
+/// Convenience wrapper for TUI startup.
 pub fn run_sync_incremental(library_path: &Path) -> Result<SyncStats> {
-    run_sync_impl(library_path, false, false, true)
+    run_sync(library_path, false, false, false)
 }
 
 fn run_sync_impl(
@@ -692,7 +693,7 @@ mod tests {
         run_init(root).unwrap();
 
         // Sync with no changes
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.directories_added, 0);
         assert_eq!(stats.directories_removed, 0);
         assert_eq!(stats.files_added, 0);
@@ -716,7 +717,7 @@ mod tests {
         fs::write(root.join("photos/image2.jpg"), "more data").unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.files_added, 1);
         assert_eq!(stats.files_removed, 0);
 
@@ -744,7 +745,7 @@ mod tests {
         fs::remove_file(root.join("photos/image2.jpg")).unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.files_added, 0);
         assert_eq!(stats.files_removed, 1);
 
@@ -773,7 +774,7 @@ mod tests {
         fs::write(root.join("videos/clip.mp4"), "video").unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.directories_added, 1);
         assert_eq!(stats.files_added, 1);
 
@@ -801,7 +802,7 @@ mod tests {
         fs::remove_dir_all(root.join("videos")).unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.directories_removed, 1);
         assert_eq!(stats.files_removed, 1);
 
@@ -828,7 +829,7 @@ mod tests {
         fs::write(root.join("photos/image.jpg"), "modified data with more content").unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.files_modified, 1);
 
         // Verify size updated in DB
@@ -841,7 +842,7 @@ mod tests {
     #[test]
     fn test_sync_without_init() {
         let temp = TempDir::new().unwrap();
-        let result = run_sync(temp.path(), false, false);
+        let result = run_sync(temp.path(), false, false, true);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No database found"));
     }
@@ -867,7 +868,7 @@ mod tests {
         fs::write(root.join("Hongdan/Vol3/img.jpg"), "data").unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.directories_added, 4); // Hongdan + Vol1 + Vol2 + Vol3
 
         // Verify parent_id relationships are correct
@@ -911,7 +912,7 @@ mod tests {
         fs::rename(root.join("korean/Hongdan"), root.join("artists/Hongdan")).unwrap();
 
         // Sync
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
 
         // Should detect the move
         assert_eq!(stats.directories_moved, 1);
@@ -955,7 +956,7 @@ mod tests {
         fs::rename(root.join("b/Photos"), root.join("d/Photos")).unwrap();
 
         // Sync - should NOT transfer metadata due to ambiguity
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
         assert_eq!(stats.directories_moved, 0); // Ambiguous, no transfer
 
         // Verify metadata was NOT transferred (both should have no rating)
@@ -988,7 +989,7 @@ mod tests {
         drop(db);
 
         // Sync should NOT fail with FK constraint error
-        let stats = run_sync(root, false, false).unwrap();
+        let stats = run_sync(root, false, false, true).unwrap();
 
         // The "" directory should NOT be deleted
         assert_eq!(stats.directories_removed, 0);
