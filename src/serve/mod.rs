@@ -58,6 +58,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/health", get(handlers::health))
         .route("/api/directories", get(handlers::get_directories))
         .route(
+            "/api/duplicates/summary",
+            get(handlers::get_duplicates_summary),
+        )
+        .route("/api/duplicates", get(handlers::get_duplicates))
+        .route("/api/duplicates/trash", post(handlers::trash_files))
+        .route(
             "/api/directories/{id}/files",
             get(handlers::get_directory_files),
         )
@@ -285,6 +291,290 @@ mod tests {
         let tags = json["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0], "travel"); // should be lowercased
+    }
+
+    // ==================== Duplicates Tests ====================
+
+    fn test_state_with_duplicates() -> Arc<AppState> {
+        let db = Database::open_in_memory().unwrap();
+        let dir1 = db.insert_directory("photos/vacation", None, None).unwrap();
+        let dir2 = db.insert_directory("backup/2024", None, None).unwrap();
+
+        // Exact duplicates: same hash in two folders
+        let f1 = db
+            .insert_file_with_dimensions(dir1, "beach.jpg", 4200000, 100, Some("image"), Some(4032), Some(3024))
+            .unwrap();
+        let f2 = db
+            .insert_file_with_dimensions(dir2, "beach_copy.jpg", 4200000, 101, Some("image"), Some(4032), Some(3024))
+            .unwrap();
+        db.set_file_hash(f1, "aabbccdd").unwrap();
+        db.set_file_hash(f2, "aabbccdd").unwrap();
+
+        // Another pair of exact duplicates
+        let f3 = db
+            .insert_file_with_dimensions(dir1, "sunset.jpg", 3000000, 200, Some("image"), Some(1920), Some(1080))
+            .unwrap();
+        let f4 = db
+            .insert_file_with_dimensions(dir2, "sunset_copy.jpg", 3000000, 201, Some("image"), Some(1920), Some(1080))
+            .unwrap();
+        db.set_file_hash(f3, "eeff0011").unwrap();
+        db.set_file_hash(f4, "eeff0011").unwrap();
+
+        // Unique file (not a duplicate)
+        let f5 = db
+            .insert_file(dir1, "unique.jpg", 1000, 300, Some("image"))
+            .unwrap();
+        db.set_file_hash(f5, "unique123").unwrap();
+
+        Arc::new(AppState {
+            db: Arc::new(Mutex::new(db)),
+            library_path: PathBuf::from("/tmp/test-library"),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_duplicates_summary() {
+        let state = test_state_with_duplicates();
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates/summary?threshold=8")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["exact_groups"], 2);
+        assert_eq!(json["exact_files"], 4);
+    }
+
+    #[tokio::test]
+    async fn test_duplicates_summary_empty_db() {
+        let state = test_state();
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates/summary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["exact_groups"], 0);
+        assert_eq!(json["exact_files"], 0);
+        assert_eq!(json["similar_groups"], 0);
+        assert_eq!(json["similar_files"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_duplicates_exact() {
+        let state = test_state_with_duplicates();
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates?type=exact")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["total_groups"], 2);
+        assert_eq!(json["page"], 1);
+
+        let groups = json["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+
+        // Each group should have 2 files
+        for group in groups {
+            assert_eq!(group["match_type"], "exact");
+            assert!(group["hash"].is_string());
+            let files = group["files"].as_array().unwrap();
+            assert_eq!(files.len(), 2);
+            // Auto-suggest should pick a file
+            assert!(group["suggested_keep_id"].as_i64().unwrap() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_duplicates_auto_suggest_highest_resolution() {
+        let state = {
+            let db = Database::open_in_memory().unwrap();
+            let dir1 = db.insert_directory("photos", None, None).unwrap();
+            let dir2 = db.insert_directory("backup", None, None).unwrap();
+
+            // Higher resolution file
+            let f1 = db
+                .insert_file_with_dimensions(dir1, "high_res.jpg", 5000000, 100, Some("image"), Some(4032), Some(3024))
+                .unwrap();
+            // Lower resolution file
+            let f2 = db
+                .insert_file_with_dimensions(dir2, "low_res.jpg", 2000000, 101, Some("image"), Some(1920), Some(1080))
+                .unwrap();
+            db.set_file_hash(f1, "samehash").unwrap();
+            db.set_file_hash(f2, "samehash").unwrap();
+
+            Arc::new(AppState {
+                db: Arc::new(Mutex::new(db)),
+                library_path: PathBuf::from("/tmp/test-library"),
+            })
+        };
+
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates?type=exact")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let json = body_json(response).await;
+        let group = &json["groups"][0];
+        let suggested_id = group["suggested_keep_id"].as_i64().unwrap();
+
+        // The file with 4032×3024 should be suggested (higher resolution)
+        let high_res_file = group["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["width"].as_i64() == Some(4032))
+            .unwrap();
+        assert_eq!(suggested_id, high_res_file["id"].as_i64().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_duplicates_folder_super_groups() {
+        // Two groups share the same pair of folders → should create a super-group
+        let state = test_state_with_duplicates();
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates?type=exact")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let json = body_json(response).await;
+        let super_groups = json["folder_super_groups"].as_array().unwrap();
+
+        // Both groups have photos/vacation + backup/2024 → one super-group
+        assert_eq!(super_groups.len(), 1);
+        let sg = &super_groups[0];
+        let folders = sg["folders"].as_array().unwrap();
+        assert_eq!(folders.len(), 2);
+        let group_indices = sg["group_indices"].as_array().unwrap();
+        assert_eq!(group_indices.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_duplicates_pagination() {
+        let state = test_state_with_duplicates();
+        let app = build_router(state);
+
+        // Request page 1 with per_page=1
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates?type=exact&page=1&per_page=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let json = body_json(response).await;
+        assert_eq!(json["total_groups"], 2);
+        assert_eq!(json["page"], 1);
+        assert_eq!(json["per_page"], 1);
+        assert_eq!(json["groups"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_trash_files_empty() {
+        let state = test_state();
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/duplicates/trash")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"file_ids": []}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["trashed"], 0);
+        assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_trash_files_moves_to_trash_and_removes_from_db() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let library_path = tmp_dir.path().to_path_buf();
+
+        // Create directory structure and files
+        let photos_dir = library_path.join("photos");
+        std::fs::create_dir_all(&photos_dir).unwrap();
+        std::fs::write(photos_dir.join("dupe.jpg"), b"fake image data").unwrap();
+
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+        let file_id = db
+            .insert_file(dir_id, "dupe.jpg", 15, 100, Some("image"))
+            .unwrap();
+
+        let state = Arc::new(AppState {
+            db: Arc::new(Mutex::new(db)),
+            library_path: library_path.clone(),
+        });
+
+        let app = build_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/duplicates/trash")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"file_ids": [{}]}}"#, file_id)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["trashed"], 1);
+
+        // File should be moved to .picman-trash/photos/dupe.jpg
+        assert!(!photos_dir.join("dupe.jpg").exists());
+        assert!(library_path
+            .join(".picman-trash/photos/dupe.jpg")
+            .exists());
+
+        // DB entry should be gone
+        let db = state.db.lock().unwrap();
+        assert!(db.get_file_with_path(file_id).unwrap().is_none());
     }
 
     #[tokio::test]

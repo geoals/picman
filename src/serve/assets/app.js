@@ -6,6 +6,7 @@ import { renderTagChips } from './tags.js';
 import { setupFilterListeners } from './filters.js';
 import { setupInfiniteScroll, initZoom } from './grid.js';
 import { setupLightbox } from './lightbox.js';
+import { initDuplicates } from './duplicates.js';
 
 async function init() {
     try {
@@ -17,6 +18,7 @@ async function init() {
         setupInfiniteScroll();
         setupLightbox();
         initZoom();
+        initDuplicates();
 
         selectDirectory("root");
     } catch (err) {

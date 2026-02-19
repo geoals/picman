@@ -99,7 +99,7 @@ pub fn get_web_thumbnail_dir() -> Option<PathBuf> {
 // ==================== Thumbnail Path Computation ====================
 
 /// Generate a thumbnail path for an image based on its path hash
-fn get_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
+pub(crate) fn get_thumbnail_path(original_path: &Path) -> Option<PathBuf> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -135,7 +135,7 @@ pub fn compute_video_thumbnail_path(original_path: &Path, mtime: std::time::Syst
 }
 
 /// Get video thumbnail path with "vid_" prefix
-fn get_video_thumbnail_path(video_path: &Path) -> Option<PathBuf> {
+pub(crate) fn get_video_thumbnail_path(video_path: &Path) -> Option<PathBuf> {
     get_thumbnail_path(video_path)
         .map(|p| p.with_file_name(format!("vid_{}", p.file_name().unwrap().to_string_lossy())))
 }

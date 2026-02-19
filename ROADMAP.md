@@ -74,9 +74,10 @@
 - [ ] Keep/cull actions with visual state
 
 ### Phase 6: Duplicate Detection
-- [ ] Find duplicates by hash
+- [x] Find duplicates by hash
 - [ ] Duplicates panel in TUI
-- [ ] CLI output for scripting
+- [x] CLI output for scripting (`picman dupes`, `picman dupes --json`)
+- [x] Web UI duplicate resolution (compare, keep/trash, per-folder rules)
 
 ### Phase 7: Views & Portability
 - [ ] Symlink view creation (preserve hierarchy)
@@ -98,7 +99,7 @@
   - Present suggestions during rating/browsing, user confirms with single key
 
 ### Image Analysis (Future)
-- [ ] Similar image detection (perceptual hashing - pHash/dHash)
+- [x] Similar image detection (perceptual hashing - dHash, `picman sync --perceptual` + `picman dupes`)
 - [ ] Same scene detection (ML-based, different angles)
 - [ ] Face detection/grouping
 - [x] EXIF orientation reading (for correct preview/tagging)

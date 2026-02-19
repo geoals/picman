@@ -52,6 +52,7 @@ impl Database {
                 media_type TEXT CHECK (media_type IN ('image', 'video', 'other')),
                 width INTEGER,
                 height INTEGER,
+                perceptual_hash INTEGER,
                 UNIQUE(directory_id, filename)
             );
 
@@ -96,6 +97,18 @@ impl Database {
                 .conn
                 .execute("ALTER TABLE files ADD COLUMN height INTEGER", []);
             self.conn.execute_batch("PRAGMA user_version = 1")?;
+        }
+
+        if version < 2 {
+            // Add perceptual_hash column for duplicate detection
+            let _ = self.conn.execute(
+                "ALTER TABLE files ADD COLUMN perceptual_hash INTEGER",
+                [],
+            );
+            self.conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_files_perceptual_hash ON files(perceptual_hash);
+                 PRAGMA user_version = 2;",
+            )?;
         }
 
         Ok(())
@@ -250,6 +263,72 @@ mod tests {
         let file = db.get_file_by_name(dir_id, "img.jpg").unwrap().unwrap();
         assert_eq!(file.width, Some(640));
         assert_eq!(file.height, Some(480));
+    }
+
+    #[test]
+    fn test_migration_v1_to_v2_adds_perceptual_hash() {
+        // Simulate a version-1 database (has width/height but no perceptual_hash)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE directories (
+                id INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                parent_id INTEGER REFERENCES directories(id),
+                rating INTEGER,
+                mtime INTEGER
+            );
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY,
+                directory_id INTEGER NOT NULL REFERENCES directories(id),
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime INTEGER NOT NULL,
+                hash TEXT,
+                rating INTEGER,
+                media_type TEXT,
+                width INTEGER,
+                height INTEGER,
+                UNIQUE(directory_id, filename)
+            );
+            CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL);
+            CREATE TABLE file_tags (file_id INTEGER, tag_id INTEGER, PRIMARY KEY (file_id, tag_id));
+            CREATE TABLE directory_tags (directory_id INTEGER, tag_id INTEGER, PRIMARY KEY (directory_id, tag_id));
+            PRAGMA user_version = 1;
+            "#,
+        )
+        .unwrap();
+
+        // Insert data before migration
+        conn.execute("INSERT INTO directories (path) VALUES ('photos')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO files (directory_id, filename, size, mtime, media_type, width, height)
+             VALUES (1, 'img.jpg', 100, 0, 'image', 1920, 1080)",
+            [],
+        )
+        .unwrap();
+
+        // Wrap with Database — this runs create_tables + migrations.
+        // This is the exact scenario that was failing: create_tables tried to
+        // CREATE INDEX on perceptual_hash before the migration added the column.
+        let db = Database { conn };
+        db.initialize_schema().expect("Migration from v1 to v2 should succeed");
+
+        // Verify perceptual_hash column exists and the index was created
+        db.conn
+            .execute("UPDATE files SET perceptual_hash = 42 WHERE id = 1", [])
+            .expect("perceptual_hash column should exist after migration");
+
+        let hash: i64 = db
+            .conn
+            .query_row(
+                "SELECT perceptual_hash FROM files WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(hash, 42);
     }
 
     #[test]

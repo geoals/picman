@@ -23,20 +23,52 @@
                 <label>Tags</label>
                 <div id="tag-chips" class="tag-chips"></div>
             </div>
+            <div id="dupes-nav">
+                <button id="dupes-btn" class="dupes-nav-btn">
+                    Duplicates <span id="dupes-badge" class="badge hidden"></span>
+                </button>
+            </div>
             <div id="directory-tree"></div>
         </aside>
         <main id="main">
-            <div id="toolbar">
-                <div id="breadcrumb"></div>
-                <div id="dir-rating" class="dir-rating"></div>
-                <div id="dir-tags" class="dir-tags"></div>
-                <div class="zoom-controls">
-                    <button id="zoom-in" title="Zoom in (+)">+</button>
-                    <button id="zoom-out" title="Zoom out (−)">−</button>
+            <div id="library-view">
+                <div id="toolbar">
+                    <div id="breadcrumb"></div>
+                    <div id="dir-rating" class="dir-rating"></div>
+                    <div id="dir-tags" class="dir-tags"></div>
+                    <div class="zoom-controls">
+                        <button id="zoom-in" title="Zoom in (+)">+</button>
+                        <button id="zoom-out" title="Zoom out (−)">−</button>
+                    </div>
+                    <div id="file-count"></div>
                 </div>
-                <div id="file-count"></div>
+                <div id="grid"></div>
             </div>
-            <div id="grid"></div>
+            <div id="duplicates-view" class="hidden">
+                <div id="dupes-toolbar">
+                    <button id="dupes-back-btn" class="dupes-back-btn" title="Back to library (Esc)">&#9664; Library</button>
+                    <div class="dupes-type-toggle">
+                        <button id="dupes-type-exact" class="dupes-type-btn active">Exact</button>
+                        <button id="dupes-type-similar" class="dupes-type-btn">Similar</button>
+                    </div>
+                    <div id="dupes-progress" class="dupes-progress"></div>
+                </div>
+                <div id="dupes-content">
+                    <div id="dupes-group-header"></div>
+                    <div id="dupes-cards"></div>
+                    <div id="dupes-folder-rule" class="hidden"></div>
+                </div>
+                <div id="dupes-actions">
+                    <div class="dupes-nav-buttons">
+                        <button id="dupes-prev" title="Previous group (k)">&#9664; Prev</button>
+                        <button id="dupes-skip" title="Skip group (s)">Skip</button>
+                        <button id="dupes-confirm" title="Confirm group (Enter)">Confirm &#9654;</button>
+                    </div>
+                    <div class="dupes-shortcuts">
+                        j/k=groups &nbsp; 1-9=toggle &nbsp; a=accept &nbsp; Enter=confirm &nbsp; s=skip &nbsp; f=folder rule &nbsp; t=type &nbsp; Esc=back
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
     <div id="lightbox" class="hidden">

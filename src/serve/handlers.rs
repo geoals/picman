@@ -8,6 +8,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 
 use crate::db::Database;
+use crate::perceptual_hash;
 use crate::thumbnails;
 
 use super::models::*;
@@ -547,6 +548,476 @@ pub async fn serve_original(
         .header(header::CACHE_CONTROL, "max-age=86400")
         .body(Body::from(bytes))
         .unwrap())
+}
+
+// ==================== Duplicates ====================
+
+#[derive(serde::Deserialize)]
+pub struct DuplicatesParams {
+    #[serde(rename = "type")]
+    pub match_type: Option<String>,
+    pub threshold: Option<u32>,
+    pub page: Option<usize>,
+    pub per_page: Option<usize>,
+}
+
+pub async fn get_duplicates_summary(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DuplicatesParams>,
+) -> Result<Json<DuplicatesSummary>, AppError> {
+    let threshold = params.threshold.unwrap_or(8);
+    let db = state.db.clone();
+
+    let summary = spawn_db(db, move |db| {
+        let exact_groups = db.find_duplicates_with_paths()?;
+        let exact_files: usize = exact_groups.iter().map(|g| g.files.len()).sum();
+
+        let hashes_raw = db.get_all_perceptual_hashes()?;
+        let hashes_u64: Vec<(i64, u64)> = hashes_raw
+            .iter()
+            .map(|(id, h)| (*id, *h as u64))
+            .collect();
+        let similar_groups_raw = perceptual_hash::group_by_similarity(&hashes_u64, threshold);
+
+        // Exclude file IDs that are in exact duplicate groups
+        let exact_file_ids: std::collections::HashSet<i64> = exact_groups
+            .iter()
+            .flat_map(|g| g.files.iter().map(|(f, _)| f.id))
+            .collect();
+
+        let similar_groups: Vec<&Vec<i64>> = similar_groups_raw
+            .iter()
+            .filter(|group| {
+                // Keep group if it has 2+ files NOT in exact groups
+                let non_exact: Vec<&i64> = group
+                    .iter()
+                    .filter(|id| !exact_file_ids.contains(id))
+                    .collect();
+                non_exact.len() >= 2
+            })
+            .collect();
+
+        let similar_files: usize = similar_groups
+            .iter()
+            .map(|g| {
+                g.iter()
+                    .filter(|id| !exact_file_ids.contains(id))
+                    .count()
+            })
+            .sum();
+
+        Ok(DuplicatesSummary {
+            exact_groups: exact_groups.len(),
+            exact_files,
+            similar_groups: similar_groups.len(),
+            similar_files,
+        })
+    })
+    .await?;
+
+    Ok(Json(summary))
+}
+
+pub async fn get_duplicates(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DuplicatesParams>,
+) -> Result<Json<DuplicatesResponse>, AppError> {
+    let match_type = params.match_type.unwrap_or_else(|| "exact".to_string());
+    let threshold = params.threshold.unwrap_or(8);
+    let page = params.page.unwrap_or(1).max(1);
+    let per_page = params.per_page.unwrap_or(50).min(200);
+    let db = state.db.clone();
+
+    let response = spawn_db(db, move |db| {
+        let conn = db.connection();
+
+        match match_type.as_str() {
+            "exact" => build_exact_response(db, conn, page, per_page),
+            "similar" => build_similar_response(db, conn, threshold, page, per_page),
+            _ => Err(anyhow::anyhow!("Invalid type: must be 'exact' or 'similar'")),
+        }
+    })
+    .await?;
+
+    Ok(Json(response))
+}
+
+fn build_exact_response(
+    db: &Database,
+    conn: &rusqlite::Connection,
+    page: usize,
+    per_page: usize,
+) -> anyhow::Result<DuplicatesResponse> {
+    let exact_groups = db.find_duplicates_with_paths()?;
+    let total_groups = exact_groups.len();
+
+    let start = (page - 1) * per_page;
+    let paged_groups: Vec<_> = exact_groups
+        .into_iter()
+        .enumerate()
+        .skip(start)
+        .take(per_page)
+        .collect();
+
+    // Batch-fetch tags for all files in paged groups
+    let all_file_ids: Vec<i64> = paged_groups
+        .iter()
+        .flat_map(|(_, g)| g.files.iter().map(|(f, _)| f.id))
+        .collect();
+    let all_tags = batch_get_file_tags(conn, &all_file_ids)?;
+
+    let mut groups = Vec::new();
+    let mut all_group_folders: Vec<(usize, Vec<String>)> = Vec::new();
+
+    for (group_index, dup_group) in &paged_groups {
+        let files: Vec<DuplicateFileResponse> = dup_group
+            .files
+            .iter()
+            .map(|(f, dir_path)| DuplicateFileResponse {
+                id: f.id,
+                filename: f.filename.clone(),
+                directory_path: dir_path.clone(),
+                size: f.size,
+                width: f.width,
+                height: f.height,
+                rating: f.rating,
+                media_type: f.media_type.clone(),
+                tags: all_tags.get(&f.id).cloned().unwrap_or_default(),
+            })
+            .collect();
+
+        let suggested_keep_id = suggest_keep_id(&files);
+
+        let unique_dirs: Vec<String> = {
+            let mut dirs: Vec<String> =
+                files.iter().map(|f| f.directory_path.clone()).collect();
+            dirs.sort();
+            dirs.dedup();
+            dirs
+        };
+        all_group_folders.push((*group_index, unique_dirs));
+
+        groups.push(DuplicateGroupResponse {
+            group_index: *group_index,
+            match_type: "exact".to_string(),
+            hash: Some(dup_group.hash.clone()),
+            max_distance: None,
+            files,
+            suggested_keep_id,
+        });
+    }
+
+    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
+
+    Ok(DuplicatesResponse {
+        groups,
+        total_groups,
+        page,
+        per_page,
+        folder_super_groups,
+    })
+}
+
+fn build_similar_response(
+    db: &Database,
+    conn: &rusqlite::Connection,
+    threshold: u32,
+    page: usize,
+    per_page: usize,
+) -> anyhow::Result<DuplicatesResponse> {
+    // Get exact duplicate file IDs to exclude
+    let exact_groups = db.find_duplicates_with_paths()?;
+    let exact_file_ids: std::collections::HashSet<i64> = exact_groups
+        .iter()
+        .flat_map(|g| g.files.iter().map(|(f, _)| f.id))
+        .collect();
+
+    let hashes_raw = db.get_all_perceptual_hashes()?;
+    let hashes_u64: Vec<(i64, u64)> = hashes_raw
+        .iter()
+        .map(|(id, h)| (*id, *h as u64))
+        .collect();
+    let similar_groups_raw = perceptual_hash::group_by_similarity(&hashes_u64, threshold);
+
+    // Filter: keep groups with 2+ non-exact files
+    let filtered_groups: Vec<Vec<i64>> = similar_groups_raw
+        .into_iter()
+        .map(|group| {
+            group
+                .into_iter()
+                .filter(|id| !exact_file_ids.contains(id))
+                .collect::<Vec<_>>()
+        })
+        .filter(|group| group.len() >= 2)
+        .collect();
+
+    let total_groups = filtered_groups.len();
+    let start = (page - 1) * per_page;
+    let paged_groups: Vec<_> = filtered_groups
+        .into_iter()
+        .enumerate()
+        .skip(start)
+        .take(per_page)
+        .collect();
+
+    // Build hash lookup for distance computation
+    let hash_map: HashMap<i64, u64> = hashes_u64.iter().copied().collect();
+
+    // Batch fetch all file data
+    let all_file_ids: Vec<i64> = paged_groups
+        .iter()
+        .flat_map(|(_, g)| g.iter().copied())
+        .collect();
+    let all_tags = batch_get_file_tags(conn, &all_file_ids)?;
+
+    let mut groups = Vec::new();
+    let mut all_group_folders: Vec<(usize, Vec<String>)> = Vec::new();
+
+    for (group_index, file_ids) in &paged_groups {
+        let mut files = Vec::new();
+        for &file_id in file_ids {
+            if let Some((f, dir_path)) = db.get_file_with_path(file_id)? {
+                files.push(DuplicateFileResponse {
+                    id: f.id,
+                    filename: f.filename,
+                    directory_path: dir_path,
+                    size: f.size,
+                    width: f.width,
+                    height: f.height,
+                    rating: f.rating,
+                    media_type: f.media_type,
+                    tags: all_tags.get(&f.id).cloned().unwrap_or_default(),
+                });
+            }
+        }
+
+        if files.len() < 2 {
+            continue;
+        }
+
+        // Compute max Hamming distance within group
+        let mut max_distance = 0u32;
+        for (i, &a) in file_ids.iter().enumerate() {
+            for &b in &file_ids[i + 1..] {
+                let ha = hash_map.get(&a).copied().unwrap_or(0);
+                let hb = hash_map.get(&b).copied().unwrap_or(0);
+                let d = perceptual_hash::hamming_distance(ha, hb);
+                if d > max_distance {
+                    max_distance = d;
+                }
+            }
+        }
+
+        let suggested_keep_id = suggest_keep_id(&files);
+
+        let unique_dirs: Vec<String> = {
+            let mut dirs: Vec<String> =
+                files.iter().map(|f| f.directory_path.clone()).collect();
+            dirs.sort();
+            dirs.dedup();
+            dirs
+        };
+        all_group_folders.push((*group_index, unique_dirs));
+
+        groups.push(DuplicateGroupResponse {
+            group_index: *group_index,
+            match_type: "similar".to_string(),
+            hash: None,
+            max_distance: Some(max_distance),
+            files,
+            suggested_keep_id,
+        });
+    }
+
+    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
+
+    Ok(DuplicatesResponse {
+        groups,
+        total_groups,
+        page,
+        per_page,
+        folder_super_groups,
+    })
+}
+
+/// Pick the best file to keep: highest resolution (width×height), fallback to largest size.
+fn suggest_keep_id(files: &[DuplicateFileResponse]) -> i64 {
+    files
+        .iter()
+        .max_by_key(|f| {
+            let pixels = f
+                .width
+                .unwrap_or(0)
+                .saturating_mul(f.height.unwrap_or(0)) as i64;
+            (pixels, f.size)
+        })
+        .map(|f| f.id)
+        .unwrap_or(0)
+}
+
+/// Compute folder super-groups: pairs of folders that appear together in 2+ groups.
+fn compute_folder_super_groups(
+    all_group_folders: &[(usize, Vec<String>)],
+) -> Vec<FolderSuperGroup> {
+    let mut pair_map: HashMap<(String, String), Vec<usize>> = HashMap::new();
+
+    for (group_index, dirs) in all_group_folders {
+        if dirs.len() == 2 {
+            let pair = if dirs[0] <= dirs[1] {
+                (dirs[0].clone(), dirs[1].clone())
+            } else {
+                (dirs[1].clone(), dirs[0].clone())
+            };
+            pair_map.entry(pair).or_default().push(*group_index);
+        }
+    }
+
+    pair_map
+        .into_iter()
+        .filter(|(_, indices)| indices.len() >= 2)
+        .map(|((a, b), indices)| FolderSuperGroup {
+            folders: vec![a, b],
+            group_indices: indices,
+        })
+        .collect()
+}
+
+pub async fn trash_files(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TrashFilesRequest>,
+) -> Result<Json<TrashFilesResponse>, AppError> {
+    if body.file_ids.is_empty() {
+        return Ok(Json(TrashFilesResponse {
+            trashed: 0,
+            errors: vec![],
+        }));
+    }
+
+    let library_path = state.library_path.clone();
+    let db = state.db.clone();
+
+    // Phase 1: resolve file paths from DB
+    let file_paths: Vec<(i64, PathBuf, String, String)> = spawn_db(db.clone(), {
+        let file_ids = body.file_ids.clone();
+        move |db| {
+            let mut paths = Vec::new();
+            for file_id in &file_ids {
+                if let Some((file, dir_path)) = db.get_file_with_path(*file_id)? {
+                    let full_path = if dir_path.is_empty() {
+                        library_path.join(&file.filename)
+                    } else {
+                        library_path.join(&dir_path).join(&file.filename)
+                    };
+                    paths.push((*file_id, full_path, dir_path, file.filename));
+                }
+            }
+            Ok(paths)
+        }
+    })
+    .await?;
+
+    // Phase 2: move files + delete thumbnails (no DB lock held)
+    let library_path = state.library_path.clone();
+    let move_results: Vec<(i64, Result<(), String>)> =
+        tokio::task::spawn_blocking(move || {
+            let trash_root = library_path.join(".picman-trash");
+            let mut results = Vec::new();
+
+            for (file_id, full_path, dir_path, filename) in &file_paths {
+                let result = (|| -> Result<(), String> {
+                    if !full_path.exists() {
+                        return Err(format!("File not found: {}", full_path.display()));
+                    }
+
+                    // Compute thumbnail paths BEFORE moving (needs fs::metadata)
+                    let thumb_path = thumbnails::get_thumbnail_path(full_path);
+                    let video_thumb_path = thumbnails::get_video_thumbnail_path(full_path);
+                    let web_thumb_path = thumbnails::get_web_thumbnail_path(full_path);
+
+                    // Compute trash destination
+                    let trash_dir = if dir_path.is_empty() {
+                        trash_root.clone()
+                    } else {
+                        trash_root.join(dir_path)
+                    };
+                    let mut trash_path = trash_dir.join(filename);
+
+                    // Handle name conflicts
+                    if trash_path.exists() {
+                        let stem = std::path::Path::new(filename)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let ext = std::path::Path::new(filename)
+                            .extension()
+                            .map(|e| format!(".{}", e.to_string_lossy()))
+                            .unwrap_or_default();
+                        for i in 2.. {
+                            trash_path = trash_dir.join(format!("{}_{}{}", stem, i, ext));
+                            if !trash_path.exists() {
+                                break;
+                            }
+                        }
+                    }
+
+                    std::fs::create_dir_all(&trash_dir)
+                        .map_err(|e| format!("Failed to create trash dir: {}", e))?;
+                    std::fs::rename(full_path, &trash_path)
+                        .map_err(|e| format!("Failed to move file: {}", e))?;
+
+                    // Delete thumbnails (ignore errors — may not exist)
+                    if let Some(p) = thumb_path {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    if let Some(p) = video_thumb_path {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    if let Some(p) = web_thumb_path {
+                        let _ = std::fs::remove_file(p);
+                    }
+
+                    Ok(())
+                })();
+
+                results.push((*file_id, result));
+            }
+
+            results
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Phase 3: delete successfully moved files from DB
+    let successfully_moved: Vec<i64> = move_results
+        .iter()
+        .filter(|(_, r)| r.is_ok())
+        .map(|(id, _)| *id)
+        .collect();
+
+    let errors: Vec<TrashErrorResponse> = move_results
+        .iter()
+        .filter_map(|(id, r)| {
+            r.as_ref().err().map(|e| TrashErrorResponse {
+                file_id: *id,
+                error: e.clone(),
+            })
+        })
+        .collect();
+
+    if !successfully_moved.is_empty() {
+        spawn_db(db, move |db| {
+            for file_id in &successfully_moved {
+                db.delete_file(*file_id)?;
+            }
+            Ok(())
+        })
+        .await?;
+    }
+
+    let trashed = move_results.iter().filter(|(_, r)| r.is_ok()).count();
+
+    Ok(Json(TrashFilesResponse { trashed, errors }))
 }
 
 // ==================== Embedded Assets ====================

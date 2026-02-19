@@ -1,0 +1,421 @@
+/* Duplicates view — comparison cards, folder rules, toolbar. */
+
+/* ==================== Sidebar Button ==================== */
+
+#dupes-nav {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.dupes-nav-btn {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.15s;
+}
+
+.dupes-nav-btn:hover {
+    background: var(--bg-hover);
+}
+
+.badge {
+    background: var(--accent);
+    color: #000;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    min-width: 18px;
+    text-align: center;
+}
+
+/* ==================== Toolbar ==================== */
+
+#dupes-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    flex-shrink: 0;
+}
+
+.dupes-back-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.dupes-back-btn:hover {
+    background: var(--bg-hover);
+}
+
+.dupes-type-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.dupes-type-btn {
+    background: var(--bg);
+    color: var(--text-muted);
+    border: none;
+    padding: 4px 14px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.15s, color 0.15s;
+}
+
+.dupes-type-btn:not(:last-child) {
+    border-right: 1px solid var(--border);
+}
+
+.dupes-type-btn.active {
+    background: var(--accent);
+    color: #000;
+}
+
+.dupes-type-btn:hover:not(.active) {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.dupes-progress {
+    margin-left: auto;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* ==================== Content Area ==================== */
+
+#dupes-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+#dupes-group-header {
+    font-size: 0.9rem;
+    margin-bottom: 12px;
+}
+
+.group-num {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.group-folders {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* ==================== Comparison Cards ==================== */
+
+#dupes-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.dupe-card {
+    position: relative;
+    background: var(--bg-surface);
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    width: 240px;
+    flex-shrink: 0;
+    transition: border-color 0.15s;
+}
+
+.dupe-card.focused {
+    border-color: var(--accent);
+}
+
+.dupe-card.keep {
+    border-color: var(--tag-color);
+}
+
+.dupe-card.trash {
+    border-color: #8b4040;
+    opacity: 0.7;
+}
+
+/* Decision label */
+
+.dupe-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 3px 0;
+    z-index: 1;
+}
+
+.label-keep {
+    background: var(--tag-color);
+    color: #000;
+}
+
+.label-trash {
+    background: #8b4040;
+    color: #fff;
+}
+
+/* File number badge */
+
+.dupe-number {
+    position: absolute;
+    top: 28px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.7);
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+}
+
+/* Thumbnail */
+
+.dupe-thumb-wrap {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.dupe-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* File info */
+
+.dupe-info {
+    padding: 8px;
+}
+
+.dupe-filename {
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dupe-dir {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.dupe-meta {
+    display: flex;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.dupe-rating {
+    color: var(--rating-color);
+    font-size: 0.75rem;
+    margin-top: 2px;
+}
+
+.dupe-tags {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.dupe-tag {
+    color: var(--tag-color);
+    font-size: 0.7rem;
+}
+
+/* Action buttons */
+
+.dupe-buttons {
+    display: flex;
+    gap: 4px;
+    padding: 0 8px 8px;
+}
+
+.dupe-buttons button {
+    flex: 1;
+    padding: 4px 0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.dupe-buttons button:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.btn-keep.active {
+    background: var(--tag-color);
+    color: #000;
+    border-color: var(--tag-color);
+}
+
+.btn-trash.active {
+    background: #8b4040;
+    color: #fff;
+    border-color: #8b4040;
+}
+
+/* ==================== Folder Rule ==================== */
+
+#dupes-folder-rule {
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.folder-rule-text {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.folder-rule-options {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.folder-rule-btn {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.folder-rule-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+}
+
+.folder-rule-btn strong {
+    color: var(--accent);
+}
+
+/* ==================== Bottom Actions Bar ==================== */
+
+#dupes-actions {
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface);
+    padding: 8px 16px;
+    flex-shrink: 0;
+}
+
+.dupes-nav-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 6px;
+}
+
+.dupes-nav-buttons button {
+    padding: 6px 18px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dupes-nav-buttons button:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.dupes-nav-buttons button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#dupes-confirm {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+#dupes-confirm:hover:not(:disabled) {
+    background: var(--accent-hover);
+}
+
+.dupes-shortcuts {
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+/* ==================== Layout Integration ==================== */
+
+#duplicates-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+#duplicates-view.hidden {
+    display: none;
+}
+
+#library-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+#library-view.hidden {
+    display: none;
+}

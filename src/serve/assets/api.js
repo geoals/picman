@@ -88,3 +88,20 @@ export async function removeDirTag(dirId, tagName) {
         "DELETE"
     );
 }
+
+// ==================== Duplicates ====================
+
+export async function fetchDuplicatesSummary(threshold = 8) {
+    return fetchJson(`/api/duplicates/summary?threshold=${threshold}`);
+}
+
+export async function fetchDuplicates(type = 'exact', threshold = 8, page = 1, perPage = 50) {
+    const params = new URLSearchParams({
+        type, threshold, page, per_page: perPage,
+    });
+    return fetchJson(`/api/duplicates?${params}`);
+}
+
+export async function trashFiles(fileIds) {
+    return apiRequest('/api/duplicates/trash', 'POST', { file_ids: fileIds });
+}
