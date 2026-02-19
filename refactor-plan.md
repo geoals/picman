@@ -67,25 +67,21 @@ Total Rust: **11,759 lines** (54 files)
 
 **Finding:** No overlap with sync. Scanner provides pure FS traversal (`walkdir` + media classification); sync delegates to Scanner then does DB reconciliation. They are complementary, not redundant. Only `init.rs` and `sync.rs` use the `Scanner` struct; other callers (`post_process.rs`, `tui/operations.rs`) use standalone image metadata functions only (`detect_orientation`, `read_dimensions`).
 
+## Completed Investigations
+
+### 6. `cli/sync.rs` Step C — ✅ INVESTIGATED (no merge needed)
+
+**Finding:** After the helpers extraction in Step B, the two strategies are fundamentally different in purpose and structure:
+
+- `sync_database_incremental` (~190 lines) — optimized for speed: scans dirs first, only stats files in changed dirs, tracks mtime, has quick-exit path. No move detection.
+- `sync_database` (~280 lines) — optimized for correctness: full FS scan, ~150 lines of move-detection logic (basename matching, metadata/tag/thumbnail preservation). Essential for users who reorganize their library.
+
+**Shared structure** (already extracted): `insert_new_directory`, `upsert_file`, `get_or_create_root_dir`, `resolve_parent_id`. The remaining bodies are dominated by strategy-specific logic.
+
+**Decision:** Leave separate. Merging would require many conditional branches and make the code harder to follow — the wrong abstraction. Both functions are well within manageable size.
+
+**Note:** `--full` sync remains valuable because incremental sync does not detect directory moves (metadata/tags/thumbnails are lost when dirs are renamed). This is an acceptable speed-vs-completeness tradeoff.
+
 ## Remaining Work
 
-### 6. `cli/sync.rs` Step C — Investigate merging sync strategies
-
-**Current state:** sync.rs has 717 code lines with two separate strategies:
-- `sync_database_incremental` (~190 lines, line 199) — mtime-based change detection, selective file scanning
-- `sync_database` (~320 lines, line 393) — full scan, compares all FS entries against DB
-
-Both now use the shared helpers from Step B (`resolve_parent_id`, `get_or_create_root_dir`, `insert_new_directory`, `upsert_file`).
-
-**Investigation needed:**
-1. Read both strategies end-to-end now that helpers are extracted
-2. Identify remaining duplication between the two
-3. Determine if they can share a common structure (e.g., a single function parameterized by "which dirs/files to scan") or if the strategies are fundamentally different enough to stay separate
-4. Check if `sync_database` (full) is still needed at all — incremental is now the default (commit cbbd80c), full sync is only available via `--full` flag
-
-**Decision criteria:**
-- If there's substantial remaining duplication → merge into parameterized function
-- If the strategies are mostly different after helpers extraction → leave separate (they're already manageable at ~190 and ~320 lines)
-- If full sync is rarely used → consider simplifying or removing it
-
-**How to start:** Read `src/cli/sync.rs` lines 199-end, compare the two strategy functions structurally.
+None — all items investigated or completed. The codebase is in good shape at ~11,759 lines across 54 files, with the largest files either well-organized or already refactored.
