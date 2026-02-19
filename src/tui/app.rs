@@ -472,11 +472,11 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> Result<KeyAction> {
     }
 
     // Handle operations menu
-    if state.operations_menu.is_some() {
+    if let Some(ref mut menu) = state.operations_menu {
         match code {
             KeyCode::Esc | KeyCode::Char('o') => state.close_operations_menu(),
-            KeyCode::Up | KeyCode::Char('k') => state.operations_menu_up(),
-            KeyCode::Down | KeyCode::Char('j') => state.operations_menu_down(),
+            KeyCode::Up | KeyCode::Char('k') => menu.move_up(),
+            KeyCode::Down | KeyCode::Char('j') => menu.move_down(),
             KeyCode::Enter => state.operations_menu_select(),
             KeyCode::Char('1') => {
                 state.close_operations_menu();

@@ -671,6 +671,28 @@ pub struct OperationsMenuState {
     pub selected: usize,
 }
 
+impl OperationsMenuState {
+    const ITEM_COUNT: usize = 5;
+
+    /// Move selection up (wraps to bottom)
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        } else {
+            self.selected = Self::ITEM_COUNT - 1;
+        }
+    }
+
+    /// Move selection down (wraps to top)
+    pub fn move_down(&mut self) {
+        if self.selected < Self::ITEM_COUNT - 1 {
+            self.selected += 1;
+        } else {
+            self.selected = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1298,6 +1320,54 @@ mod tests {
         assert_eq!(state.input, "p");
         // "p" matches both portrait (prefix) and landscape (contains)
         assert_eq!(state.filtered_tags, vec!["portrait", "landscape"]);
+    }
+
+    // ==================== OperationsMenuState Tests ====================
+
+    #[test]
+    fn test_operations_menu_move_down() {
+        let mut menu = OperationsMenuState {
+            directory_path: String::new(),
+            file_count: 0,
+            selected: 0,
+        };
+        menu.move_down();
+        assert_eq!(menu.selected, 1);
+        menu.move_down();
+        assert_eq!(menu.selected, 2);
+    }
+
+    #[test]
+    fn test_operations_menu_move_down_wraps() {
+        let mut menu = OperationsMenuState {
+            directory_path: String::new(),
+            file_count: 0,
+            selected: 4,
+        };
+        menu.move_down();
+        assert_eq!(menu.selected, 0);
+    }
+
+    #[test]
+    fn test_operations_menu_move_up() {
+        let mut menu = OperationsMenuState {
+            directory_path: String::new(),
+            file_count: 0,
+            selected: 3,
+        };
+        menu.move_up();
+        assert_eq!(menu.selected, 2);
+    }
+
+    #[test]
+    fn test_operations_menu_move_up_wraps() {
+        let mut menu = OperationsMenuState {
+            directory_path: String::new(),
+            file_count: 0,
+            selected: 0,
+        };
+        menu.move_up();
+        assert_eq!(menu.selected, 4);
     }
 
     // ==================== FilterCriteria::matches_file Tests ====================

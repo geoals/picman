@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -83,28 +83,6 @@ impl AppState {
         self.force_redraw = true;
     }
 
-    /// Move selection up in operations menu
-    pub fn operations_menu_up(&mut self) {
-        if let Some(ref mut menu) = self.operations_menu {
-            if menu.selected > 0 {
-                menu.selected -= 1;
-            } else {
-                menu.selected = 4; // Wrap to bottom
-            }
-        }
-    }
-
-    /// Move selection down in operations menu
-    pub fn operations_menu_down(&mut self) {
-        if let Some(ref mut menu) = self.operations_menu {
-            if menu.selected < 4 {
-                menu.selected += 1;
-            } else {
-                menu.selected = 0; // Wrap to top
-            }
-        }
-    }
-
     /// Recursively collect all descendant directory IDs
     pub(crate) fn collect_descendant_dir_ids(&self, parent_id: i64, result: &mut Vec<i64>) {
         for dir in &self.tree.directories {
@@ -155,63 +133,9 @@ impl AppState {
             return;
         }
 
-        use crate::thumbnails::{has_thumbnail, is_image_file, is_video_file};
-
-        let selected_dir = match self.get_selected_directory() {
-            Some(d) => d.clone(),
-            None => return,
-        };
-
-        // Collect all directory IDs under selected directory (including itself)
-        let mut dir_ids = vec![selected_dir.id];
-        self.collect_descendant_dir_ids(selected_dir.id, &mut dir_ids);
-
-        let library_path = self.library_path.clone();
-
-        // Collect files from all directories, skipping already-processed ones
-        let mut file_data: Vec<(i64, PathBuf)> = Vec::new();
-        for dir_id in &dir_ids {
-            if let Ok(files) = self.db.get_files_in_directory(*dir_id) {
-                // Get directory path for this dir_id
-                let dir_path = self.tree.directories.iter()
-                    .find(|d| d.id == *dir_id)
-                    .map(|d| d.path.clone())
-                    .unwrap_or_default();
-
-                for file in files {
-                    let path = if dir_path.is_empty() {
-                        library_path.join(&file.filename)
-                    } else {
-                        library_path.join(&dir_path).join(&file.filename)
-                    };
-
-                    // Filter based on operation type and skip already-processed
-                    let include = match operation {
-                        OperationType::Thumbnails => {
-                            (is_image_file(&path) || is_video_file(&path)) && !has_thumbnail(&path)
-                        }
-                        OperationType::Orientation => {
-                            if !is_image_file(&path) {
-                                false
-                            } else {
-                                // Check if already has orientation tag
-                                let tags = self.db.get_file_tags(file.id).unwrap_or_default();
-                                !tags.contains(&"landscape".to_string()) && !tags.contains(&"portrait".to_string())
-                            }
-                        }
-                        OperationType::Hash => file.hash.is_none(),
-                        OperationType::DirPreview | OperationType::DirPreviewRecursive => false,
-                    };
-
-                    if include {
-                        file_data.push((file.id, path));
-                    }
-                }
-            }
-        }
-
-        let total = file_data.len();
-        if total == 0 {
+        // Collect files that need processing (skips already-processed ones)
+        let file_data = self.collect_files_for_operation(operation);
+        if file_data.is_empty() {
             self.status_message = Some("Nothing to do - all files already processed".to_string());
             return;
         }
@@ -223,14 +147,13 @@ impl AppState {
 
         self.background_progress = Some(BackgroundProgress {
             operation,
-            total,
+            total: file_data.len(),
             completed: Arc::clone(&completed),
             done: Arc::clone(&done),
             cancelled: Arc::clone(&cancelled),
             start_time: Instant::now(),
         });
 
-        // Get db path for operations that need it
         let db_path = self.library_path.join(".picman.db");
 
         // Spawn background thread for parallel processing
@@ -254,65 +177,85 @@ impl AppState {
                     });
                 }
                 OperationType::Orientation => {
-                    use crate::db::Database;
-
-                    // Process in parallel, collect results
-                    let results: Vec<_> = file_data.par_iter()
-                        .filter_map(|(file_id, path)| {
-                            if cancelled.load(Ordering::Relaxed) {
-                                return None;
-                            }
-                            let orientation = detect_orientation(path);
-                            completed.fetch_add(1, Ordering::Relaxed);
-                            Some((*file_id, orientation))
-                        })
-                        .collect();
-
-                    // Update DB serially (SQLite is not thread-safe)
-                    if !cancelled.load(Ordering::Relaxed) {
-                        if let Ok(db) = Database::open(&db_path) {
-                            for (file_id, orientation) in results {
-                                if let Some(tag) = orientation {
-                                    let _ = db.add_file_tag(file_id, tag);
-                                }
-                            }
-                        }
-                    }
+                    parallel_compute_serial_write(
+                        &file_data, &cancelled, &completed, &db_path,
+                        |path| detect_orientation(path),
+                        |db, file_id, tag| { let _ = db.add_file_tag(file_id, tag); },
+                    );
                 }
                 OperationType::Hash => {
-                    use crate::db::Database;
                     use crate::hash::compute_file_hash;
-
-                    // Process in parallel, collect results
-                    let results: Vec<_> = file_data.par_iter()
-                        .filter_map(|(file_id, path)| {
-                            if cancelled.load(Ordering::Relaxed) {
-                                return None;
-                            }
-                            let hash = compute_file_hash(path).ok();
-                            completed.fetch_add(1, Ordering::Relaxed);
-                            Some((*file_id, hash))
-                        })
-                        .collect();
-
-                    // Update DB serially
-                    if !cancelled.load(Ordering::Relaxed) {
-                        if let Ok(db) = Database::open(&db_path) {
-                            for (file_id, hash) in results {
-                                if let Some(h) = hash {
-                                    let _ = db.set_file_hash(file_id, &h);
-                                }
-                            }
-                        }
-                    }
+                    parallel_compute_serial_write(
+                        &file_data, &cancelled, &completed, &db_path,
+                        |path| compute_file_hash(path).ok(),
+                        |db, file_id, hash| { let _ = db.set_file_hash(file_id, &hash); },
+                    );
                 }
-                OperationType::DirPreview | OperationType::DirPreviewRecursive => {
-                    // Handled by run_dir_preview_operation
-                }
+                OperationType::DirPreview | OperationType::DirPreviewRecursive => {}
             }
 
             done.store(true, Ordering::Relaxed);
         });
+    }
+
+    /// Collect files from selected directory and descendants that need processing.
+    ///
+    /// Iterates all files under the selected directory, builds full paths,
+    /// and filters based on what the operation needs (e.g., skipping files
+    /// that already have thumbnails, hashes, or orientation tags).
+    fn collect_files_for_operation(&self, operation: OperationType) -> Vec<(i64, PathBuf)> {
+        use crate::thumbnails::{has_thumbnail, is_image_file, is_video_file};
+
+        let selected_dir = match self.get_selected_directory() {
+            Some(d) => d.clone(),
+            None => return Vec::new(),
+        };
+
+        let mut dir_ids = vec![selected_dir.id];
+        self.collect_descendant_dir_ids(selected_dir.id, &mut dir_ids);
+
+        let mut file_data = Vec::new();
+        for dir_id in &dir_ids {
+            let Ok(files) = self.db.get_files_in_directory(*dir_id) else {
+                continue;
+            };
+
+            let dir_path = self.tree.directories.iter()
+                .find(|d| d.id == *dir_id)
+                .map(|d| d.path.clone())
+                .unwrap_or_default();
+
+            for file in files {
+                let path = if dir_path.is_empty() {
+                    self.library_path.join(&file.filename)
+                } else {
+                    self.library_path.join(&dir_path).join(&file.filename)
+                };
+
+                let include = match operation {
+                    OperationType::Thumbnails => {
+                        (is_image_file(&path) || is_video_file(&path)) && !has_thumbnail(&path)
+                    }
+                    OperationType::Orientation => {
+                        if !is_image_file(&path) {
+                            false
+                        } else {
+                            let tags = self.db.get_file_tags(file.id).unwrap_or_default();
+                            !tags.contains(&"landscape".to_string())
+                                && !tags.contains(&"portrait".to_string())
+                        }
+                    }
+                    OperationType::Hash => file.hash.is_none(),
+                    OperationType::DirPreview | OperationType::DirPreviewRecursive => false,
+                };
+
+                if include {
+                    file_data.push((file.id, path));
+                }
+            }
+        }
+
+        file_data
     }
 
     /// Run directory preview generation (single or recursive)
@@ -469,6 +412,43 @@ impl AppState {
                 if let Some(next_op) = self.operation_queue.pop_front() {
                     self.run_operation(next_op);
                 }
+            }
+        }
+    }
+}
+
+/// Process files in parallel and write results to DB serially.
+///
+/// This is the shared pattern for Orientation and Hash operations:
+/// 1. Compute a value for each file using rayon (respecting cancellation)
+/// 2. Collect successful results
+/// 3. Write them to the database serially (SQLite is single-writer)
+fn parallel_compute_serial_write<T: Send>(
+    file_data: &[(i64, PathBuf)],
+    cancelled: &AtomicBool,
+    completed: &AtomicUsize,
+    db_path: &Path,
+    compute: impl Fn(&Path) -> Option<T> + Send + Sync,
+    write: impl Fn(&crate::db::Database, i64, T),
+) {
+    use rayon::prelude::*;
+
+    let results: Vec<(i64, T)> = file_data
+        .par_iter()
+        .filter_map(|(file_id, path)| {
+            if cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            let value = compute(path);
+            completed.fetch_add(1, Ordering::Relaxed);
+            value.map(|v| (*file_id, v))
+        })
+        .collect();
+
+    if !cancelled.load(Ordering::Relaxed) {
+        if let Ok(db) = crate::db::Database::open(db_path) {
+            for (file_id, value) in results {
+                write(&db, file_id, value);
             }
         }
     }
