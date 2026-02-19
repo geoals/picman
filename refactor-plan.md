@@ -1,37 +1,26 @@
 # Picman Refactoring Plan
 
-## Code Size Audit (updated after state.rs refactor)
+## Code Size Audit (updated 2026-02-19)
 
 All line counts use `cloc` (code lines only — excludes blanks and comments).
 
-Total Rust: **11,638 lines**
-
-### Module Distribution
-
-| Module | Files | Code | % of total |
-|--------|-------|------|------------|
-| TUI (non-widgets) | 15 | 4,415 | 38% |
-| CLI | 10 | 2,030 | 17% |
-| TUI widgets | 9 | 1,529 | 13% |
-| Database | 6 | 1,413 | 12% |
-| Standalone (scanner, thumbnails, hash, suggestions) | 4 | 1,085 | 9% |
-| Web server | 3 | 849 | 7% |
-| Core (main, lib, logging) | 3 | 317 | 3% |
+Total Rust: **11,759 lines** (54 files)
 
 ### Largest Files
 
-| File | Code | Concern |
-|------|------|---------|
-| `tui/dialogs.rs` | 1,186 | Grew after state.rs refactor; multiple dialog types |
-| `cli/sync.rs` | 940 | Post-processing ops don't belong here; duplicated patterns |
-| `serve/handlers.rs` | 524 | REST handlers |
-| `tui/app.rs` | 500 | Key dispatch |
-| `scanner.rs` | 456 | Filesystem traversal |
-| `thumbnails.rs` | 446 | Image + ffmpeg processing |
-| `db/files.rs` | 445 | File queries |
-| `tui/preview_loader.rs` | 415 | Background image loading |
-| `tui/operations.rs` | 371 | Background operation queue + AppState methods |
-| `tui/state/mod.rs` | 360 | Core AppState (down from 1,361) |
+| File | Code | Status |
+|------|------|--------|
+| `tui/dialogs.rs` | 1,245 | ✅ Investigated — well-organized, no action needed |
+| `cli/sync.rs` | 717 | ✅ Steps A+B done (was 940). Step C remaining |
+| `serve/handlers.rs` | 534 | Reasonable — REST handlers |
+| `tui/app.rs` | 500 | Reasonable — key dispatch |
+| `scanner.rs` | 493 | ✅ Investigated — no overlap with sync |
+| `thumbnails.rs` | 446 | Reasonable — image + video processing |
+| `db/files.rs` | 445 | Reasonable — file queries |
+| `tui/preview_loader.rs` | 415 | Reasonable — background image loading |
+| `tui/state/mod.rs` | 360 | ✅ Done (was 1,361) |
+| `tui/operations.rs` | 354 | ✅ Done (was 476) |
+| `tui/widgets/details_panel.rs` | 330 | Reasonable |
 
 ## Completed Refactorings
 
@@ -52,83 +41,51 @@ Total Rust: **11,638 lines**
 | `filter.rs` | 64 | Filter dialog state |
 | `search.rs` | 53 | Search state |
 
-Key improvements:
-- Removed delegation bloat — dialog methods called directly
-- Extracted `Directory::file_path()` and `Directory::full_path()` helpers
-- Each file has a single, clear responsibility
+### 2. `cli/sync.rs` — ✅ Steps A+B DONE
 
-## Modules Needing Refactoring
+**Was:** 940 code lines with post-processing mixed in and duplicated patterns.
 
-### 2. `cli/sync.rs` — NEXT UP
-
-**Problem:** 940 code lines. The file has three distinct concerns mixed together:
-
-1. **Sync orchestration** (~50 lines) — `run_sync`, `run_sync_incremental`, `run_sync_impl`
-2. **Sync strategies** (~570 lines) — `sync_database` (full, 4 phases) and `sync_database_incremental` (9 phases)
-3. **Post-processing operations** (~130 lines) — `backfill_dimensions`, `tag_orientation`, `hash_files`
-4. **Tests** (~190 code lines)
-
-**Issues found:**
-
-- **Post-processing doesn't belong here.** `backfill_dimensions`, `tag_orientation`, and `hash_files` are not sync-specific — they fill in NULL columns for any files, regardless of how they were added. They could be standalone CLI commands or shared utilities.
-
-- **Duplicated patterns between full and incremental sync:**
-  - Parent directory lookup (appears 4+ times)
-  - Root-level files handling (`""` directory edge case, 2 times)
-  - New directory insertion logic (2 times)
-  - File add/update logic (nearly identical in both strategies)
-  - File/directory deletion logic (2 times)
-
-- **Batch processing pattern** duplicated across `hash_files` and `tag_orientation` (both do rayon parallel + chunked DB transactions)
-
-**Plan:**
-
-**Step A — Extract post-processing to `cli/post_process.rs`:**
-- Move `backfill_dimensions`, `tag_orientation`, `hash_files` to new module
-- These are optionally chained after sync but are independent operations
-- Extract shared batch-processing helper if the pattern is clean
-- Expected: sync.rs loses ~130 lines of code + their tests
-
-**Step B — Extract shared sync helpers:**
-- `get_or_insert_directory(db, path, parent_id, mtime, cache)` — the repeated parent lookup + insert pattern
-- `get_or_insert_root_dir(db, cache)` — the `""` directory edge case
-- `upsert_file(db, dir_id, file, dimensions_fn)` — the file add/update logic
-- `delete_missing_dirs(db, ids)` / `delete_missing_files(db, ids)` — bulk deletion
-- These can live as private helpers in sync.rs or in a `cli/sync_helpers.rs`
-- Expected: removes ~100-150 lines of duplication between the two strategies
-
-**Step C — Consider merging strategies (investigate):**
-- Incremental sync is fundamentally different (mtime-based skip), so full merge may not make sense
-- But the shared helpers from Step B should make both strategies shorter and more readable
-- After Steps A+B, reassess whether further extraction is needed
-
-**Expected result:** sync.rs drops from ~940 to ~650-700 code lines, with post-processing in its own module.
+**Result (Steps A+B, commit cdbe23b):**
+- Extracted post-processing to `cli/post_process.rs` (250 code lines)
+- Extracted shared helpers: `resolve_parent_id`, `get_or_create_root_dir`, `insert_new_directory`, `upsert_file`
+- sync.rs now 717 code lines
 
 ### 3. `tui/dialogs.rs` — ✅ INVESTIGATED (no action needed)
 
-**Was:** 1,186 code lines — largest file in the codebase.
-
-**Finding:** ~660 lines of code + ~800 lines of thorough tests. Five dialog types (FilterDialogState, TagInputState, RenameDialogState, SearchState, OperationsMenuState) are genuinely distinct with no meaningful duplication. The shared `sort_prefix_first()` helper is already extracted. A trait would be a forced abstraction — each dialog has unique semantics (multi-section focus, edit/browse modes, UTF-8 cursor positioning). Splitting into per-dialog modules would add boilerplate without improving readability.
+**Finding:** ~660 code + ~800 tests. Five distinct dialog types with no meaningful duplication. A trait would be forced abstraction.
 
 ### 4. `tui/operations.rs` — ✅ DONE
 
-**Was:** 476 code lines with delegation antipatterns and duplicated parallel processing structure.
+**Was:** 476 code lines with delegation antipatterns and duplicated parallel processing.
 
-**Result:** Three focused improvements:
+**Result:**
+- Moved menu navigation onto `OperationsMenuState` (consistent with other dialog types)
+- Extracted `parallel_compute_serial_write()` helper (deduplicates Orientation/Hash pattern)
+- Extracted `collect_files_for_operation()` from 176-line `run_operation()`
 
-- **Step A:** Moved `move_up()` / `move_down()` to `OperationsMenuState` in `dialogs.rs` with tests, consistent with how all other dialog types own their navigation. Removed delegation methods from AppState.
-- **Step B:** Extracted `parallel_compute_serial_write()` helper — deduplicates the "rayon parallel compute → serial SQLite write" pattern shared by Orientation and Hash operations.
-- **Step C:** Extracted `collect_files_for_operation()` from the 176-line `run_operation()`. The main function now reads as a clear pipeline: queue check → dispatch dir preview → collect files → setup progress → spawn thread.
+### 5. `scanner.rs` — ✅ INVESTIGATED (no action needed)
 
-### 5. `scanner.rs` — TODO
+**Finding:** No overlap with sync. Scanner provides pure FS traversal (`walkdir` + media classification); sync delegates to Scanner then does DB reconciliation. They are complementary, not redundant. Only `init.rs` and `sync.rs` use the `Scanner` struct; other callers (`post_process.rs`, `tui/operations.rs`) use standalone image metadata functions only (`detect_orientation`, `read_dimensions`).
 
-**Problem:** 456 code lines. May have overlap with sync logic now that sync does its own filesystem/DB reconciliation.
+## Remaining Work
 
-## Modules That Look Reasonable
+### 6. `cli/sync.rs` Step C — Investigate merging sync strategies
 
-- **Database layer** (1,413 code lines across 6 files) — well-split by concern
-- **TUI widgets** (1,529 code lines across 9 files) — ~170 lines/file average, reasonable
-- **Web server** (849 code lines across 3 files) — appropriate for REST API + router
-- **Core** (317 code lines) — fine
-- **thumbnails.rs** (446 code lines) — image + video processing justifies the size
-- **preview_loader.rs** (415 code lines) — channel-based background loading, reasonable
+**Current state:** sync.rs has 717 code lines with two separate strategies:
+- `sync_database_incremental` (~190 lines, line 199) — mtime-based change detection, selective file scanning
+- `sync_database` (~320 lines, line 393) — full scan, compares all FS entries against DB
+
+Both now use the shared helpers from Step B (`resolve_parent_id`, `get_or_create_root_dir`, `insert_new_directory`, `upsert_file`).
+
+**Investigation needed:**
+1. Read both strategies end-to-end now that helpers are extracted
+2. Identify remaining duplication between the two
+3. Determine if they can share a common structure (e.g., a single function parameterized by "which dirs/files to scan") or if the strategies are fundamentally different enough to stay separate
+4. Check if `sync_database` (full) is still needed at all — incremental is now the default (commit cbbd80c), full sync is only available via `--full` flag
+
+**Decision criteria:**
+- If there's substantial remaining duplication → merge into parameterized function
+- If the strategies are mostly different after helpers extraction → leave separate (they're already manageable at ~190 and ~320 lines)
+- If full sync is rarely used → consider simplifying or removing it
+
+**How to start:** Read `src/cli/sync.rs` lines 199-end, compare the two strategy functions structurally.
