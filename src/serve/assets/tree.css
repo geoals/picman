@@ -29,7 +29,8 @@
     text-align: center;
     color: var(--text-muted);
     flex-shrink: 0;
-    font-size: 0.7rem;
+    font-size: 1.1rem;
+    transition: transform 0.15s;
 }
 
 .dir-name {

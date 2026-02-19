@@ -70,7 +70,8 @@ export function renderDirTags() {
 
         const remove = document.createElement("span");
         remove.className = "remove-tag";
-        remove.textContent = "×";
+        remove.classList.add("icon");
+        remove.textContent = "close";
         remove.addEventListener("click", (e) => {
             e.stopPropagation();
             removeDirTag(tag);
@@ -83,7 +84,8 @@ export function renderDirTags() {
 
     const addBtn = document.createElement("button");
     addBtn.className = "dir-tag-add";
-    addBtn.textContent = "+";
+    addBtn.classList.add("icon");
+    addBtn.textContent = "add";
     addBtn.addEventListener("click", () => showTagInput(container, addBtn));
     container.appendChild(addBtn);
 }

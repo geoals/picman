@@ -380,7 +380,7 @@ async function confirmGroup() {
         removeCurrentGroup();
     } catch (err) {
         console.error('Failed to trash files:', err);
-        confirmBtn.textContent = 'Confirm ▶';
+        confirmBtn.innerHTML = 'Confirm <span class="icon">chevron_right</span>';
         confirmBtn.disabled = false;
     }
 }

@@ -73,7 +73,10 @@ function renderDirNode(container, dir, depth) {
 
     const toggle = document.createElement("span");
     toggle.className = "dir-toggle";
-    toggle.textContent = hasKids ? (expanded ? "▾" : "▸") : "";
+    if (hasKids) {
+        toggle.classList.add("icon");
+        toggle.textContent = expanded ? "expand_more" : "chevron_right";
+    }
 
     const name = document.createElement("span");
     name.className = "dir-name";

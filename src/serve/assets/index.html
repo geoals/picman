@@ -37,8 +37,8 @@
                     <div id="dir-rating" class="dir-rating"></div>
                     <div id="dir-tags" class="dir-tags"></div>
                     <div class="zoom-controls">
-                        <button id="zoom-in" title="Zoom in (+)">+</button>
-                        <button id="zoom-out" title="Zoom out (−)">−</button>
+                        <button id="zoom-in" title="Zoom in (+)"><span class="icon">add</span></button>
+                        <button id="zoom-out" title="Zoom out (−)"><span class="icon">remove</span></button>
                     </div>
                     <div id="file-count"></div>
                 </div>
@@ -46,7 +46,7 @@
             </div>
             <div id="duplicates-view" class="hidden">
                 <div id="dupes-toolbar">
-                    <button id="dupes-back-btn" class="dupes-back-btn" title="Back to library (Esc)">&#9664; Library</button>
+                    <button id="dupes-back-btn" class="dupes-back-btn" title="Back to library (Esc)"><span class="icon">arrow_back</span> Library</button>
                     <div class="dupes-type-toggle">
                         <button id="dupes-type-exact" class="dupes-type-btn active">Exact</button>
                         <button id="dupes-type-similar" class="dupes-type-btn">Similar</button>
@@ -60,9 +60,9 @@
                 </div>
                 <div id="dupes-actions">
                     <div class="dupes-nav-buttons">
-                        <button id="dupes-prev" title="Previous group (k)">&#9664; Prev</button>
+                        <button id="dupes-prev" title="Previous group (k)"><span class="icon">chevron_left</span> Prev</button>
                         <button id="dupes-skip" title="Skip group (s)">Skip</button>
-                        <button id="dupes-confirm" title="Confirm group (Enter)">Confirm &#9654;</button>
+                        <button id="dupes-confirm" title="Confirm group (Enter)">Confirm <span class="icon">chevron_right</span></button>
                     </div>
                     <div class="dupes-shortcuts">
                         j/k=groups &nbsp; 1-9=toggle &nbsp; a=accept &nbsp; Enter=confirm &nbsp; s=skip &nbsp; f=folder rule &nbsp; t=type &nbsp; Esc=back
@@ -72,9 +72,9 @@
         </main>
     </div>
     <div id="lightbox" class="hidden">
-        <button class="close-btn" title="Close (Esc)">&times;</button>
-        <button class="nav-btn nav-prev" title="Previous (&larr;)">&lsaquo;</button>
-        <button class="nav-btn nav-next" title="Next (&rarr;)">&rsaquo;</button>
+        <button class="close-btn" title="Close (Esc)"><span class="icon">close</span></button>
+        <button class="nav-btn nav-prev" title="Previous (&larr;)"><span class="icon">chevron_left</span></button>
+        <button class="nav-btn nav-next" title="Next (&rarr;)"><span class="icon">chevron_right</span></button>
         <img src="" alt="">
         <div class="lightbox-toolbar">
             <button class="toolbar-btn" id="go-to-set">Go to photo set</button>

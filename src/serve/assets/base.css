@@ -129,3 +129,16 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--scrollbar-thumb-hover);
 }
+
+/* ==================== Icon Utility ==================== */
+
+.icon {
+    font-family: 'Material Symbols Rounded';
+    font-size: 1em;
+    line-height: 1;
+    vertical-align: middle;
+    font-weight: normal;
+    font-style: normal;
+    display: inline-block;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'opsz' 20;
+}

@@ -99,7 +99,7 @@ function createPhotoCell(file, index) {
     if (file.media_type === "video") {
         const badge = document.createElement("span");
         badge.className = "video-badge";
-        badge.textContent = "▶ Video";
+        badge.innerHTML = '<span class="icon" style="font-size:0.7rem">play_arrow</span> Video';
         cell.appendChild(badge);
     }
 
