@@ -44,7 +44,7 @@ export function renderDirectoryTree() {
 
     const rootName = document.createElement("span");
     rootName.className = "dir-name";
-    rootName.textContent = "Root";
+    rootName.textContent = "All";
 
     const rootCount = document.createElement("span");
     rootCount.className = "dir-count";
@@ -160,7 +160,7 @@ export function renderBreadcrumb() {
     if (state.selectedDirId === "root") {
         const label = document.createElement("span");
         label.className = "current";
-        label.textContent = "Root";
+        label.textContent = "All";
         container.appendChild(label);
         return;
     }
