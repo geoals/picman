@@ -1,6 +1,7 @@
 // Filter controls and cross-directory search coordination.
 
 import { state } from './state.js';
+import { pushUrl } from './router.js';
 import { loadFiles } from './api.js';
 import { selectDirectory, renderDirectoryTree, renderBreadcrumb } from './tree.js';
 import { renderGrid, renderFileCount } from './grid.js';
@@ -16,7 +17,7 @@ export function setupFilterListeners() {
     document.addEventListener("filters-changed", () => applyFilters());
 }
 
-async function applyFilters() {
+export async function applyFilters({ updateUrl = true } = {}) {
     state.currentPage = 1;
     state.currentFiles = [];
 
@@ -32,6 +33,8 @@ async function applyFilters() {
             return;
         }
     }
+
+    if (updateUrl) pushUrl();
 
     renderBreadcrumb();
     renderDirRating();

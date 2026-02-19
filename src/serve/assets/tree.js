@@ -1,6 +1,7 @@
 // Directory tree rendering, navigation, and breadcrumb.
 
 import { state } from './state.js';
+import { pushUrl } from './router.js';
 import { loadFiles } from './api.js';
 import { renderGrid, renderFileCount } from './grid.js';
 import { renderDirRating, renderDirTags } from './tags.js';
@@ -119,12 +120,19 @@ function dirDisplayName(dir) {
     return parts[parts.length - 1];
 }
 
-export async function selectDirectory(dirId, { recursive = true } = {}) {
+export async function selectDirectory(dirId, { recursive = true, updateUrl = true } = {}) {
     state.selectedDirId = dirId;
     state.recursive = recursive;
     state.useFilteredEndpoint = dirId === "root";
     state.currentPage = 1;
     state.currentFiles = [];
+
+    // Clear filters on directory navigation to avoid stale params in URL
+    state.ratingFilter = "";
+    state.tagFilter = "";
+    document.getElementById("rating-filter").value = "";
+
+    if (updateUrl) pushUrl();
 
     if (dirId !== "root" && hasChildren(dirId) && !state.expandedDirs.has(dirId)) {
         state.expandedDirs.add(dirId);

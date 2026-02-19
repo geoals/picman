@@ -1,12 +1,13 @@
 // Duplicates view — comparison UI for resolving duplicate files.
 
 import { state } from './state.js';
+import { pushUrl, replaceUrl } from './router.js';
 import { fetchDuplicatesSummary, fetchDuplicates, trashFiles, trashFolderRule } from './api.js';
 
 // ==================== Initialization ====================
 
 export async function initDuplicates() {
-    document.getElementById('dupes-btn').addEventListener('click', showDuplicatesView);
+    document.getElementById('dupes-btn').addEventListener('click', () => showDuplicatesView());
     document.getElementById('dupes-back-btn').addEventListener('click', hideDuplicatesView);
     document.getElementById('dupes-type-exact').addEventListener('click', () => setType('exact'));
     document.getElementById('dupes-type-similar').addEventListener('click', () => setType('similar'));
@@ -37,15 +38,23 @@ function updateBadge(summary) {
 
 // ==================== View Switching ====================
 
-async function showDuplicatesView() {
+export async function showDuplicatesView(type, { updateUrl = true } = {}) {
     state.view = 'duplicates';
     state.dupesCurrentGroupIndex = 0;
     state.dupesResolvedCount = 0;
     state.dupesDecisions.clear();
     state.dupesActiveFolderRule = null;
 
+    if (type && type !== state.dupesType) {
+        state.dupesType = type;
+        document.getElementById('dupes-type-exact').classList.toggle('active', type === 'exact');
+        document.getElementById('dupes-type-similar').classList.toggle('active', type === 'similar');
+    }
+
     document.getElementById('library-view').classList.add('hidden');
     document.getElementById('duplicates-view').classList.remove('hidden');
+
+    if (updateUrl) pushUrl();
 
     await loadGroups();
 }
@@ -54,6 +63,7 @@ export function hideDuplicatesView() {
     state.view = 'library';
     document.getElementById('duplicates-view').classList.add('hidden');
     document.getElementById('library-view').classList.remove('hidden');
+    pushUrl();
 }
 
 function setType(type) {
@@ -67,6 +77,7 @@ function setType(type) {
     document.getElementById('dupes-type-exact').classList.toggle('active', type === 'exact');
     document.getElementById('dupes-type-similar').classList.toggle('active', type === 'similar');
 
+    replaceUrl();
     loadGroups();
 }
 
