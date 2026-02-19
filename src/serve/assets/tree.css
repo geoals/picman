@@ -3,7 +3,7 @@
 .dir-item {
     display: flex;
     align-items: center;
-    padding: 4px 8px;
+    padding: 6px var(--space-3);
     cursor: pointer;
     font-size: 0.85rem;
     white-space: nowrap;

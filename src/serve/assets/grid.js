@@ -70,17 +70,9 @@ function createPhotoCell(file, index) {
     img.alt = file.filename;
     img.onerror = () => {
         img.style.display = "none";
-        cell.style.background = "#2a2a2a";
-        cell.style.height = "120px";
-        cell.style.display = "flex";
-        cell.style.alignItems = "center";
-        cell.style.justifyContent = "center";
-        cell.style.lineHeight = "normal";
+        cell.classList.add("error");
         const text = document.createElement("span");
-        text.style.color = "#555";
-        text.style.fontSize = "0.7rem";
-        text.style.padding = "8px";
-        text.style.wordBreak = "break-all";
+        text.className = "error-filename";
         text.textContent = file.filename;
         cell.appendChild(text);
     };

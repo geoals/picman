@@ -1,60 +1,61 @@
 /* Sidebar container, title, filter controls. */
 
 #sidebar {
-    width: var(--sidebar-width);
-    min-width: var(--sidebar-width);
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 #sidebar h1 {
-    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.95rem;
-    font-weight: 600;
-    padding: 14px 16px;
-    border-bottom: 2px solid var(--accent);
-    color: var(--accent);
-    letter-spacing: 1.5px;
-    text-transform: lowercase;
+  font-family:
+    "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", monospace;
+  font-size: 1.4rem;
+  font-weight: 600;
+  padding: var(--space-4);
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+  letter-spacing: 1.5px;
+  text-transform: lowercase;
 }
 
 #filters {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 #filters label {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
 }
 
 #filters select,
 #filters input {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 0.85rem;
-    width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px var(--space-3);
+  font-size: 0.85rem;
+  width: 100%;
 }
 
 #filters select:focus,
 #filters input:focus {
-    outline: none;
-    border-color: var(--accent);
+  outline: none;
+  border-color: var(--accent);
 }
 
 #directory-tree {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
 }

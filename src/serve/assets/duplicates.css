@@ -3,17 +3,17 @@
 /* ==================== Sidebar Button ==================== */
 
 #dupes-nav {
-    padding: 8px 12px;
+    padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
 }
 
 .dupes-nav-btn {
     width: 100%;
-    padding: 8px 12px;
+    padding: var(--space-2) var(--space-3);
     background: var(--bg-surface);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.85rem;
     text-align: left;
@@ -29,7 +29,7 @@
 
 .badge {
     background: var(--accent);
-    color: #000;
+    color: var(--on-accent);
     font-size: 0.7rem;
     font-weight: 700;
     padding: 1px 6px;
@@ -44,7 +44,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px 16px;
+    padding: var(--space-2) var(--space-4);
     border-bottom: 1px solid var(--border);
     background: var(--bg-surface);
     flex-shrink: 0;
@@ -54,8 +54,8 @@
     background: none;
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 4px 10px;
-    border-radius: 4px;
+    padding: var(--space-1) 10px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 0.8rem;
 }
@@ -67,7 +67,7 @@
 .dupes-type-toggle {
     display: flex;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
 }
 
@@ -87,7 +87,7 @@
 
 .dupes-type-btn.active {
     background: var(--accent);
-    color: #000;
+    color: var(--on-accent);
 }
 
 .dupes-type-btn:hover:not(.active) {
@@ -106,7 +106,7 @@
 #dupes-content {
     flex: 1;
     overflow-y: auto;
-    padding: 16px;
+    padding: var(--space-4);
 }
 
 #dupes-group-header {
@@ -138,7 +138,7 @@
     position: relative;
     background: var(--bg-surface);
     border: 2px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     width: 240px;
     flex-shrink: 0;
@@ -154,7 +154,7 @@
 }
 
 .dupe-card.trash {
-    border-color: #8b4040;
+    border-color: var(--danger);
     opacity: 0.7;
 }
 
@@ -175,12 +175,12 @@
 
 .label-keep {
     background: var(--tag-color);
-    color: #000;
+    color: var(--on-accent);
 }
 
 .label-trash {
-    background: #8b4040;
-    color: #fff;
+    background: var(--danger);
+    color: var(--on-danger);
 }
 
 /* File number badge */
@@ -220,7 +220,7 @@
 /* File info */
 
 .dupe-info {
-    padding: 8px;
+    padding: var(--space-2);
 }
 
 .dupe-filename {
@@ -270,15 +270,15 @@
 
 .dupe-buttons {
     display: flex;
-    gap: 4px;
-    padding: 0 8px 8px;
+    gap: var(--space-1);
+    padding: 0 var(--space-2) var(--space-2);
 }
 
 .dupe-buttons button {
     flex: 1;
     padding: 4px 0;
     border: 1px solid var(--border);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text-muted);
     font-size: 0.7rem;
@@ -293,24 +293,24 @@
 
 .btn-keep.active {
     background: var(--tag-color);
-    color: #000;
+    color: var(--on-accent);
     border-color: var(--tag-color);
 }
 
 .btn-trash.active {
-    background: #8b4040;
-    color: #fff;
-    border-color: #8b4040;
+    background: var(--danger);
+    color: var(--on-danger);
+    border-color: var(--danger);
 }
 
 /* ==================== Folder Rule ==================== */
 
 #dupes-folder-rule {
-    margin-top: 16px;
-    padding: 12px;
+    margin-top: var(--space-4);
+    padding: var(--space-4);
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-lg);
 }
 
 .folder-rule-text {
@@ -329,8 +329,8 @@
     background: var(--bg);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 6px 12px;
-    border-radius: 4px;
+    padding: 6px var(--space-3);
+    border-radius: var(--radius-sm);
     font-size: 0.78rem;
     cursor: pointer;
     transition: background 0.15s;
@@ -350,7 +350,7 @@
 #dupes-actions {
     border-top: 1px solid var(--border);
     background: var(--bg-surface);
-    padding: 8px 16px;
+    padding: var(--space-2) var(--space-4);
     flex-shrink: 0;
 }
 
@@ -364,7 +364,7 @@
 .dupes-nav-buttons button {
     padding: 6px 18px;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
     font-size: 0.8rem;
@@ -383,7 +383,7 @@
 
 #dupes-confirm {
     background: var(--accent);
-    color: #000;
+    color: var(--on-accent);
     border-color: var(--accent);
     font-weight: 600;
 }
