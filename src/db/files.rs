@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use super::Database;
 
-/// Map a row to a File struct (columns: id, directory_id, filename, size, mtime, hash, rating, media_type, width, height)
+/// Map a row to a File struct (columns: id, directory_id, filename, size, mtime, hash, rating, media_type, width, height, perceptual_hash)
 fn file_from_row(row: &Row) -> rusqlite::Result<File> {
     Ok(File {
         id: row.get(0)?,
@@ -18,6 +18,7 @@ fn file_from_row(row: &Row) -> rusqlite::Result<File> {
         media_type: row.get(7)?,
         width: row.get(8)?,
         height: row.get(9)?,
+        perceptual_hash: row.get(10)?,
     })
 }
 
@@ -34,6 +35,7 @@ pub struct File {
     pub media_type: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub perceptual_hash: Option<i64>,
 }
 
 /// Represents a file that needs hashing (id + full path)
@@ -92,7 +94,7 @@ impl Database {
         let result = self
             .connection()
             .query_row(
-                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
+                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height, perceptual_hash
                  FROM files WHERE directory_id = ?1 AND filename = ?2",
                 params![directory_id, filename],
                 |row| file_from_row(row),
@@ -104,7 +106,7 @@ impl Database {
     /// Get all files in a directory
     pub fn get_files_in_directory(&self, directory_id: i64) -> Result<Vec<File>> {
         let mut stmt = self.connection().prepare(
-            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
+            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height, perceptual_hash
              FROM files WHERE directory_id = ?1 ORDER BY filename",
         )?;
 
@@ -116,7 +118,7 @@ impl Database {
     /// Get all files in the database
     pub fn get_all_files(&self) -> Result<Vec<File>> {
         let mut stmt = self.connection().prepare(
-            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
+            "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height, perceptual_hash
              FROM files ORDER BY directory_id, filename",
         )?;
 
@@ -171,7 +173,7 @@ impl Database {
         let mut duplicates = Vec::new();
         for hash in hashes {
             let mut stmt = self.connection().prepare(
-                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height
+                "SELECT id, directory_id, filename, size, mtime, hash, rating, media_type, width, height, perceptual_hash
                  FROM files WHERE hash = ?1",
             )?;
 
@@ -209,7 +211,7 @@ impl Database {
     /// Get all files with their directory paths
     pub fn get_all_files_with_paths(&self) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, f.perceptual_hash, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              ORDER BY d.path, f.filename",
@@ -217,7 +219,7 @@ impl Database {
 
         let rows = stmt.query_map([], |row| {
             let file = file_from_row(row)?;
-            let dir_path: String = row.get(10)?;
+            let dir_path: String = row.get(11)?;
             Ok((file, dir_path))
         })?;
 
@@ -227,7 +229,7 @@ impl Database {
     /// Get files filtered by minimum rating
     pub fn get_files_by_rating(&self, min_rating: i32) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, f.perceptual_hash, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              WHERE f.rating >= ?1
@@ -236,7 +238,7 @@ impl Database {
 
         let rows = stmt.query_map([min_rating], |row| {
             let file = file_from_row(row)?;
-            let dir_path: String = row.get(10)?;
+            let dir_path: String = row.get(11)?;
             Ok((file, dir_path))
         })?;
 
@@ -246,7 +248,7 @@ impl Database {
     /// Get files that have a specific tag
     pub fn get_files_by_tag(&self, tag: &str) -> Result<Vec<(File, String)>> {
         let mut stmt = self.connection().prepare(
-            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, d.path
+            "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, f.perceptual_hash, d.path
              FROM files f
              JOIN directories d ON f.directory_id = d.id
              JOIN file_tags ft ON f.id = ft.file_id
@@ -257,7 +259,7 @@ impl Database {
 
         let rows = stmt.query_map([tag], |row| {
             let file = file_from_row(row)?;
-            let dir_path: String = row.get(10)?;
+            let dir_path: String = row.get(11)?;
             Ok((file, dir_path))
         })?;
 
@@ -355,6 +357,123 @@ impl Database {
 
         Ok(files)
     }
+
+    /// Set the perceptual hash for a file
+    pub fn set_perceptual_hash(&self, id: i64, hash: i64) -> Result<()> {
+        self.connection().execute(
+            "UPDATE files SET perceptual_hash = ?1 WHERE id = ?2",
+            params![hash, id],
+        )?;
+        Ok(())
+    }
+
+    /// Get image files that need perceptual hash computation (where perceptual_hash IS NULL)
+    pub fn get_files_needing_perceptual_hash(&self) -> Result<Vec<FileToHash>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT f.id, d.path, f.filename
+             FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.media_type = 'image' AND f.perceptual_hash IS NULL
+             ORDER BY d.path, f.filename",
+        )?;
+
+        let files: Vec<FileToHash> = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let dir_path: String = row.get(1)?;
+                let filename: String = row.get(2)?;
+
+                let path = if dir_path.is_empty() {
+                    PathBuf::from(&filename)
+                } else {
+                    PathBuf::from(&dir_path).join(&filename)
+                };
+
+                Ok(FileToHash { id, path })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(files)
+    }
+
+    /// Get all files that have a perceptual hash, returning (file_id, hash) pairs
+    pub fn get_all_perceptual_hashes(&self) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT id, perceptual_hash FROM files WHERE perceptual_hash IS NOT NULL",
+        )?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let hash: i64 = row.get(1)?;
+                Ok((id, hash))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
+
+    /// Find exact duplicate files (same xxHash) with directory paths.
+    pub fn find_duplicates_with_paths(&self) -> Result<Vec<DuplicateGroup>> {
+        let mut hash_stmt = self.connection().prepare(
+            "SELECT hash FROM files WHERE hash IS NOT NULL
+             GROUP BY hash HAVING COUNT(*) > 1",
+        )?;
+
+        let hashes: Vec<String> = hash_stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut groups = Vec::new();
+        for hash in hashes {
+            let mut stmt = self.connection().prepare(
+                "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, f.perceptual_hash, d.path
+                 FROM files f
+                 JOIN directories d ON f.directory_id = d.id
+                 WHERE f.hash = ?1
+                 ORDER BY d.path, f.filename",
+            )?;
+
+            let files: Vec<(File, String)> = stmt
+                .query_map([&hash], |row| {
+                    let file = file_from_row(row)?;
+                    let dir_path: String = row.get(11)?;
+                    Ok((file, dir_path))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            groups.push(DuplicateGroup { hash, files });
+        }
+
+        Ok(groups)
+    }
+
+    /// Get a file by ID with its directory path
+    pub fn get_file_with_path(&self, file_id: i64) -> Result<Option<(File, String)>> {
+        let result = self
+            .connection()
+            .query_row(
+                "SELECT f.id, f.directory_id, f.filename, f.size, f.mtime, f.hash, f.rating, f.media_type, f.width, f.height, f.perceptual_hash, d.path
+                 FROM files f
+                 JOIN directories d ON f.directory_id = d.id
+                 WHERE f.id = ?1",
+                params![file_id],
+                |row| {
+                    let file = file_from_row(row)?;
+                    let dir_path: String = row.get(11)?;
+                    Ok((file, dir_path))
+                },
+            )
+            .optional()?;
+        Ok(result)
+    }
+}
+
+/// A group of exact duplicate files (same xxHash)
+#[derive(Debug, Clone)]
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub files: Vec<(File, String)>, // (file, directory_path)
 }
 
 #[cfg(test)]
@@ -567,5 +686,108 @@ mod tests {
         assert_eq!(files.len(), 1);
 
         assert!(db.get_files_by_tag("nonexistent").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_set_and_get_perceptual_hash() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+        let file_id = db.insert_file(dir_id, "photo.jpg", 1024, 12345, Some("image")).unwrap();
+
+        // Initially NULL
+        let file = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
+        assert_eq!(file.perceptual_hash, None);
+
+        // Set perceptual hash (using u64 bits reinterpreted as i64)
+        let hash: u64 = 0xDEADBEEF_CAFEBABE;
+        db.set_perceptual_hash(file_id, hash as i64).unwrap();
+
+        // Read back and verify round-trip
+        let file = db.get_file_by_name(dir_id, "photo.jpg").unwrap().unwrap();
+        assert_eq!(file.perceptual_hash, Some(hash as i64));
+        assert_eq!(file.perceptual_hash.unwrap() as u64, hash);
+    }
+
+    #[test]
+    fn test_get_files_needing_perceptual_hash() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        // Image without perceptual hash (should be returned)
+        db.insert_file(dir_id, "needs_hash.jpg", 1024, 0, Some("image")).unwrap();
+
+        // Image with perceptual hash (should NOT be returned)
+        let hashed_id = db.insert_file(dir_id, "has_hash.jpg", 1024, 0, Some("image")).unwrap();
+        db.set_perceptual_hash(hashed_id, 42).unwrap();
+
+        // Video file (should NOT be returned — images only)
+        db.insert_file(dir_id, "video.mp4", 1024, 0, Some("video")).unwrap();
+
+        let files = db.get_files_needing_perceptual_hash().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].path.to_string_lossy().contains("needs_hash.jpg"));
+    }
+
+    #[test]
+    fn test_get_all_perceptual_hashes() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos", None, None).unwrap();
+
+        let f1 = db.insert_file(dir_id, "a.jpg", 1024, 0, Some("image")).unwrap();
+        let f2 = db.insert_file(dir_id, "b.jpg", 1024, 0, Some("image")).unwrap();
+        db.insert_file(dir_id, "c.jpg", 1024, 0, Some("image")).unwrap(); // no hash
+
+        db.set_perceptual_hash(f1, 100).unwrap();
+        db.set_perceptual_hash(f2, 200).unwrap();
+
+        let hashes = db.get_all_perceptual_hashes().unwrap();
+        assert_eq!(hashes.len(), 2);
+
+        let ids: Vec<i64> = hashes.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&f1));
+        assert!(ids.contains(&f2));
+    }
+
+    #[test]
+    fn test_find_duplicates_with_paths() {
+        let db = Database::open_in_memory().unwrap();
+        let dir1 = db.insert_directory("photos", None, None).unwrap();
+        let dir2 = db.insert_directory("backup", None, None).unwrap();
+
+        let f1 = db.insert_file(dir1, "beach.jpg", 4200, 0, Some("image")).unwrap();
+        let f2 = db.insert_file(dir2, "beach_copy.jpg", 4200, 0, Some("image")).unwrap();
+        let f3 = db.insert_file(dir1, "unique.jpg", 1000, 0, Some("image")).unwrap();
+
+        db.set_file_hash(f1, "samehash").unwrap();
+        db.set_file_hash(f2, "samehash").unwrap();
+        db.set_file_hash(f3, "different").unwrap();
+
+        let groups = db.find_duplicates_with_paths().unwrap();
+        assert_eq!(groups.len(), 1);
+
+        let group = &groups[0];
+        assert_eq!(group.hash, "samehash");
+        assert_eq!(group.files.len(), 2);
+
+        // Verify directory paths are included
+        let paths: Vec<&str> = group.files.iter().map(|(_, p)| p.as_str()).collect();
+        assert!(paths.contains(&"photos"));
+        assert!(paths.contains(&"backup"));
+    }
+
+    #[test]
+    fn test_get_file_with_path() {
+        let db = Database::open_in_memory().unwrap();
+        let dir_id = db.insert_directory("photos/vacation", None, None).unwrap();
+        let file_id = db.insert_file(dir_id, "sunset.jpg", 1024, 0, Some("image")).unwrap();
+
+        let result = db.get_file_with_path(file_id).unwrap();
+        assert!(result.is_some());
+        let (file, dir_path) = result.unwrap();
+        assert_eq!(file.filename, "sunset.jpg");
+        assert_eq!(dir_path, "photos/vacation");
+
+        // Non-existent file
+        assert!(db.get_file_with_path(9999).unwrap().is_none());
     }
 }

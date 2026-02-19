@@ -4,9 +4,9 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use picman::cli::{
-    run_check_previews, run_check_thumbnails, run_generate_previews, run_generate_thumbnails,
-    run_generate_web_thumbnails, run_init, run_list, run_rate, run_repair, run_status, run_sync,
-    run_tag, ListOptions, TagOptions,
+    run_check_previews, run_check_thumbnails, run_dupes, run_generate_previews,
+    run_generate_thumbnails, run_generate_web_thumbnails, run_init, run_list, run_rate,
+    run_repair, run_status, run_sync_with_perceptual, run_tag, ListOptions, TagOptions,
 };
 use picman::logging::init_logging;
 use picman::serve::run_serve;
@@ -43,6 +43,9 @@ enum Commands {
         /// Recompute hashes for changed files
         #[arg(long)]
         hash: bool,
+        /// Compute perceptual hashes for image files (for duplicate detection)
+        #[arg(long)]
+        perceptual: bool,
         /// Auto-tag image orientation (landscape/portrait)
         #[arg(long)]
         orientation: bool,
@@ -50,10 +53,20 @@ enum Commands {
         #[arg(long)]
         full: bool,
     },
-    /// Find duplicate files
+    /// Find duplicate files (exact and visually similar)
     Dupes {
+        /// Path to library root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
         /// Scope to subdirectory
+        #[arg(long)]
         subdir: Option<PathBuf>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Hamming distance threshold for perceptual similarity (default: 8)
+        #[arg(long, default_value = "8")]
+        threshold: u32,
     },
     /// List files matching criteria
     List {
@@ -178,8 +191,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 stats.directories, stats.files, stats.images, stats.videos
             );
         }
-        Some(Commands::Sync { path, hash, orientation, full }) => {
-            let stats = run_sync(&path, hash, orientation, full)?;
+        Some(Commands::Sync { path, hash, perceptual, orientation, full }) => {
+            let stats = run_sync_with_perceptual(&path, hash, orientation, perceptual, full)?;
             println!(
                 "Synced: +{} -{} directories, +{} -{} ~{} files",
                 stats.directories_added,
@@ -200,16 +213,18 @@ fn run_command(cli: Cli) -> Result<()> {
                     stats.files_hashed, stats.hash_errors
                 );
             }
+            if perceptual {
+                println!(
+                    "Perceptual hashed: {} files ({} errors)",
+                    stats.perceptual_hashed, stats.perceptual_hash_errors
+                );
+            }
             if orientation {
                 println!("Orientation tagged: {} files", stats.orientation_tagged);
             }
         }
-        Some(Commands::Dupes { subdir }) => {
-            println!("Finding duplicates...");
-            if let Some(sub) = subdir {
-                println!("  Scoped to: {}", sub.display());
-            }
-            // TODO: Implement dupes
+        Some(Commands::Dupes { path, subdir, json, threshold }) => {
+            run_dupes(&path, subdir.as_deref(), json, threshold)?;
         }
         Some(Commands::List { path, rating, tag }) => {
             let options = ListOptions {

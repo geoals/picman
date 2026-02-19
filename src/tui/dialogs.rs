@@ -1386,6 +1386,7 @@ mod tests {
             media_type: media_type.map(|s| s.to_string()),
             width: None,
             height: None,
+            perceptual_hash: None,
         }
     }
 

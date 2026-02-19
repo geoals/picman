@@ -124,10 +124,11 @@ fn sync_detects_new_files() {
     // Add a new file
     create_test_image(&library.path().join("vacation/photo3.jpg"));
 
-    // Sync should detect the new file
+    // Sync should detect the new file (--full because mtime may not change within same second)
     picman()
         .arg("sync")
         .arg(library.path())
+        .arg("--full")
         .assert()
         .success()
         .stdout(predicate::str::contains("+1").and(predicate::str::contains("files")));
@@ -143,10 +144,11 @@ fn sync_detects_deleted_files() {
     // Delete a file
     fs::remove_file(library.path().join("vacation/photo1.jpg")).unwrap();
 
-    // Sync should detect the deletion
+    // Sync should detect the deletion (--full because mtime may not change within same second)
     picman()
         .arg("sync")
         .arg(library.path())
+        .arg("--full")
         .assert()
         .success()
         .stdout(predicate::str::contains("-1").and(predicate::str::contains("files")));
@@ -404,8 +406,8 @@ fn sync_moved_directory_preserves_file_ratings() {
     )
     .unwrap();
 
-    // Sync to detect the move
-    picman().arg("sync").arg(lib_path).assert().success();
+    // Sync to detect the move (--full to avoid mtime-resolution false negatives)
+    picman().arg("sync").arg(lib_path).arg("--full").assert().success();
 
     // The file should still have its rating at the new path
     picman()
@@ -437,8 +439,8 @@ fn sync_moved_directory_preserves_file_tags() {
     )
     .unwrap();
 
-    // Sync to detect the move
-    picman().arg("sync").arg(lib_path).assert().success();
+    // Sync to detect the move (--full to avoid mtime-resolution false negatives)
+    picman().arg("sync").arg(lib_path).arg("--full").assert().success();
 
     // The file should still have its tag at the new path
     picman()
@@ -468,8 +470,8 @@ fn sync_moved_nested_directory_preserves_file_metadata() {
     // Move parent directory: vacation/ -> trips/
     fs::rename(library.path().join("vacation"), library.path().join("trips")).unwrap();
 
-    // Sync
-    picman().arg("sync").arg(lib_path).assert().success();
+    // Sync (--full to avoid mtime-resolution false negatives)
+    picman().arg("sync").arg(lib_path).arg("--full").assert().success();
 
     // File should still have rating and tag
     picman()
@@ -506,8 +508,8 @@ fn sync_moved_directory_with_modified_file_loses_metadata() {
     // Move the directory
     fs::rename(library.path().join("vacation"), library.path().join("holiday")).unwrap();
 
-    // Sync
-    picman().arg("sync").arg(lib_path).assert().success();
+    // Sync (--full to avoid mtime-resolution false negatives)
+    picman().arg("sync").arg(lib_path).arg("--full").assert().success();
 
     // File should NOT have rating anymore (it's a "new" file due to modification)
     picman()

@@ -167,11 +167,15 @@ Sync database with filesystem changes.
 ```bash
 picman sync /path/to/library
 picman sync /path/to/library --hash         # also compute file hashes
+picman sync /path/to/library --perceptual   # compute perceptual hashes (for duplicate detection)
 picman sync /path/to/library --orientation  # tag images as landscape/portrait
 picman sync /path/to/library --full         # full rescan (default is incremental)
+picman sync /path/to/library --hash --perceptual  # both hash types at once
 ```
 
 By default, sync is **incremental**: only directories with changed mtime are scanned for file changes. Use `--full` to force a complete rescan of all files.
+
+The `--perceptual` flag computes dHash perceptual hashes for image files, enabling visually-similar duplicate detection via `picman dupes`. Only processes images that don't already have a perceptual hash.
 
 The `--orientation` flag tags images based on dimensions (EXIF-aware). Square images are not tagged. You can also use the TUI operations menu (`o`) to tag orientation interactively.
 
@@ -217,6 +221,26 @@ picman previews /path/to/library --check  # show which dirs are missing previews
 - Skips directories that already have previews
 - Shows progress with progress bar
 - Runs faster if thumbnails are generated first (`picman thumbnails` before `picman previews`)
+
+### dupes
+Find duplicate files — both exact copies (same content hash) and visually similar images (perceptual hash).
+```bash
+picman dupes /path/to/library                      # show all duplicates
+picman dupes /path/to/library --json               # JSON output for scripting
+picman dupes /path/to/library --threshold 4        # stricter similarity matching
+picman dupes /path/to/library --subdir photos      # scoped to subdirectory
+```
+
+**Prerequisites:** Run `picman sync --hash` for exact duplicate detection, and `picman sync --perceptual` for visual similarity detection.
+
+**Output categories:**
+- **Exact copies**: Files with identical content (same xxHash). These are byte-identical duplicates.
+- **Visually similar**: Images with similar perceptual hashes (dHash Hamming distance ≤ threshold). Detects photos saved at different JPEG qualities, resolutions, or formats.
+
+The `--threshold` flag controls perceptual similarity sensitivity (default: 8). Lower values = stricter matching, higher values = more permissive. Typical ranges:
+- 0-5: Very similar (different compression/quality)
+- 6-10: Similar (minor edits, slight crops)
+- 10+: Loosely similar
 
 ### status
 Show library health information.

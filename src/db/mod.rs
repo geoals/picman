@@ -5,5 +5,5 @@ mod schema;
 mod tags;
 
 pub use directories::Directory;
-pub use files::{File, FileToHash};
+pub use files::{DuplicateGroup, File, FileToHash};
 pub use schema::Database;

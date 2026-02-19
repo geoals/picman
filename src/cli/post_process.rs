@@ -9,10 +9,14 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::db::Database;
 use crate::hash::compute_file_hash;
+use crate::perceptual_hash::compute_perceptual_hash;
 use crate::scanner::{detect_orientation, read_dimensions_fast};
+use crate::thumbnails::is_image_file;
 
 const HASH_BATCH_SIZE: usize = 1000;
 const HASH_THREADS: usize = 2;
+const PHASH_BATCH_SIZE: usize = 500;
+const PHASH_THREADS: usize = 2;
 const DIMENSION_BATCH_SIZE: usize = 1000;
 const ORIENTATION_BATCH_SIZE: usize = 5000;
 
@@ -163,6 +167,80 @@ pub(super) fn hash_files(db: &Database, library_path: &Path) -> Result<(usize, u
     }
 
     info!(total_hashed, total_errors, "hashing complete");
+
+    Ok((total_hashed, total_errors))
+}
+
+/// Compute perceptual hashes for image files that don't have one yet
+#[instrument(skip(db, library_path))]
+pub(super) fn compute_perceptual_hashes(db: &Database, library_path: &Path) -> Result<(usize, usize)> {
+    let files = db.get_files_needing_perceptual_hash()?;
+
+    // Filter to actual image files (double-check with extension)
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|f| is_image_file(&f.path))
+        .collect();
+
+    let total = files.len();
+    info!(total, "image files needing perceptual hash");
+
+    if total == 0 {
+        return Ok((0, 0));
+    }
+
+    let progress = ProgressBar::new(total as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("    {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {elapsed_precise} | {msg}")
+            .unwrap()
+            .progress_chars("██░"),
+    );
+    progress.set_message("computing perceptual hashes");
+
+    let mut total_hashed = 0usize;
+    let mut total_errors = 0usize;
+
+    let phash_pool = ThreadPoolBuilder::new()
+        .num_threads(PHASH_THREADS)
+        .build()
+        .expect("failed to create perceptual hash thread pool");
+
+    for batch in files.chunks(PHASH_BATCH_SIZE) {
+        let results: Vec<_> = phash_pool.install(|| {
+            batch
+                .par_iter()
+                .map(|file| {
+                    let full_path = library_path.join(&file.path);
+                    let result = compute_perceptual_hash(&full_path);
+                    progress.inc(1);
+                    (file.id, result)
+                })
+                .collect()
+        });
+
+        db.begin_transaction()?;
+        for (id, result) in results {
+            match result {
+                Ok(hash) => {
+                    db.set_perceptual_hash(id, hash as i64)?;
+                    total_hashed += 1;
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to compute perceptual hash");
+                    total_errors += 1;
+                }
+            }
+        }
+        db.commit()?;
+    }
+
+    progress.finish_with_message(format!(
+        "{} hashed, {} errors",
+        total_hashed, total_errors
+    ));
+
+    info!(total_hashed, total_errors, "perceptual hashing complete");
 
     Ok((total_hashed, total_errors))
 }

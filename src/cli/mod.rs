@@ -1,3 +1,4 @@
+mod dupes;
 mod init;
 mod list;
 mod post_process;
@@ -9,12 +10,13 @@ mod sync;
 mod tag;
 mod thumbnails;
 
+pub use dupes::run_dupes;
 pub use init::run_init;
 pub use list::{run_list, FileInfo, ListOptions};
 pub use previews::{run_check_previews, run_generate_previews};
 pub use rate::run_rate;
 pub use repair::run_repair;
 pub use status::run_status;
-pub use sync::{run_sync, run_sync_incremental};
+pub use sync::{run_sync, run_sync_incremental, run_sync_with_perceptual};
 pub use tag::{run_tag, TagOptions};
 pub use thumbnails::{run_check_thumbnails, run_generate_thumbnails, run_generate_web_thumbnails};

@@ -9,7 +9,7 @@ use crate::db::Database;
 use crate::scanner::{read_dimensions, MediaType, ScannedFile, Scanner};
 use crate::thumbnails::{compute_thumbnail_path, compute_video_thumbnail_path, is_image_file, is_video_file};
 
-use super::post_process::{backfill_dimensions, hash_files, tag_orientation};
+use super::post_process::{backfill_dimensions, compute_perceptual_hashes, hash_files, tag_orientation};
 
 use super::init::DB_FILENAME;
 
@@ -26,6 +26,8 @@ pub struct SyncStats {
     pub hash_errors: usize,
     pub orientation_tagged: usize,
     pub dimensions_backfilled: usize,
+    pub perceptual_hashed: usize,
+    pub perceptual_hash_errors: usize,
 }
 
 /// Metadata to preserve when a file is moved (as part of directory move)
@@ -50,7 +52,18 @@ struct DirectoryMetadata {
 /// which is much faster for large libraries on slow storage (HDD).
 /// Pass `full: true` to force a complete rescan of all files.
 pub fn run_sync(library_path: &Path, compute_hashes: bool, tag_orientation_flag: bool, full: bool) -> Result<SyncStats> {
-    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, !full)
+    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, false, !full)
+}
+
+/// Run sync with perceptual hashing enabled
+pub fn run_sync_with_perceptual(
+    library_path: &Path,
+    compute_hashes: bool,
+    tag_orientation_flag: bool,
+    perceptual: bool,
+    full: bool,
+) -> Result<SyncStats> {
+    run_sync_impl(library_path, compute_hashes, tag_orientation_flag, perceptual, !full)
 }
 
 /// Run an incremental sync - only scan files in changed directories.
@@ -63,6 +76,7 @@ fn run_sync_impl(
     library_path: &Path,
     compute_hashes: bool,
     tag_orientation_flag: bool,
+    perceptual: bool,
     incremental: bool,
 ) -> Result<SyncStats> {
     let library_path = library_path
@@ -99,6 +113,12 @@ fn run_sync_impl(
         let (hashed, errors) = hash_files(&db, &library_path)?;
         stats.files_hashed = hashed;
         stats.hash_errors = errors;
+    }
+
+    if perceptual {
+        let (hashed, errors) = compute_perceptual_hashes(&db, &library_path)?;
+        stats.perceptual_hashed = hashed;
+        stats.perceptual_hash_errors = errors;
     }
 
     Ok(stats)
