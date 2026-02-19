@@ -32,6 +32,7 @@ export const state = {
     dupesDecisions: new Map(),      // Map<groupIndex, Map<fileId, 'keep'|'trash'>>
     dupesFocusedFileIndex: 0,
     dupesResolvedCount: 0,
+    dupesActiveFolderRule: null,   // { keepFolder, trashFolder } or null
     dupesLoading: false,
     dupesSummary: null,
 };

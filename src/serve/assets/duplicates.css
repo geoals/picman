@@ -345,6 +345,36 @@
     color: var(--accent);
 }
 
+.folder-rule-batch {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.batch-confirm-btn {
+    background: var(--accent);
+    color: var(--on-accent);
+    border: 1px solid var(--accent);
+    padding: 8px var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.batch-confirm-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+}
+
+.batch-confirm-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* ==================== Bottom Actions Bar ==================== */
 
 #dupes-actions {

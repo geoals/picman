@@ -1,7 +1,7 @@
 // Duplicates view — comparison UI for resolving duplicate files.
 
 import { state } from './state.js';
-import { fetchDuplicatesSummary, fetchDuplicates, trashFiles } from './api.js';
+import { fetchDuplicatesSummary, fetchDuplicates, trashFiles, trashFolderRule } from './api.js';
 
 // ==================== Initialization ====================
 
@@ -42,6 +42,7 @@ async function showDuplicatesView() {
     state.dupesCurrentGroupIndex = 0;
     state.dupesResolvedCount = 0;
     state.dupesDecisions.clear();
+    state.dupesActiveFolderRule = null;
 
     document.getElementById('library-view').classList.add('hidden');
     document.getElementById('duplicates-view').classList.remove('hidden');
@@ -61,6 +62,7 @@ function setType(type) {
     state.dupesCurrentGroupIndex = 0;
     state.dupesResolvedCount = 0;
     state.dupesDecisions.clear();
+    state.dupesActiveFolderRule = null;
 
     document.getElementById('dupes-type-exact').classList.toggle('active', type === 'exact');
     document.getElementById('dupes-type-similar').classList.toggle('active', type === 'similar');
@@ -270,6 +272,26 @@ function renderFolderRule(group) {
             applyFolderRule(superGroup, keepIdx);
         });
     });
+
+    // Show batch confirm when a folder rule is active and matches this super-group
+    const rule = state.dupesActiveFolderRule;
+    if (rule && superGroup.folders.includes(rule.keepFolder) && superGroup.folders.includes(rule.trashFolder)) {
+        const totalCount = superGroup.group_indices.length;
+
+        if (totalCount > 1) {
+            const batchDiv = document.createElement('div');
+            batchDiv.className = 'folder-rule-batch';
+            batchDiv.innerHTML = `
+                <button id="dupes-batch-confirm" class="batch-confirm-btn">
+                    Confirm all ${totalCount} groups
+                    <span class="icon">done_all</span>
+                </button>
+            `;
+            el.appendChild(batchDiv);
+
+            document.getElementById('dupes-batch-confirm').addEventListener('click', confirmSuperGroup);
+        }
+    }
 }
 
 function updateNavButtons() {
@@ -326,10 +348,10 @@ function acceptAutoSuggestion() {
     renderCurrentGroup();
 }
 
-function hasAllDecisions() {
-    const group = getCurrentGroup();
+function hasAllDecisionsForGroup(groupIndex) {
+    const group = state.dupesGroups.find(g => g.group_index === groupIndex);
     if (!group) return false;
-    const decisions = state.dupesDecisions.get(group.group_index);
+    const decisions = state.dupesDecisions.get(groupIndex);
     if (!decisions) return false;
 
     // Must have at least one keep and all files decided
@@ -340,6 +362,12 @@ function hasAllDecisions() {
         if (d === 'keep') hasKeep = true;
     }
     return hasKeep;
+}
+
+function hasAllDecisions() {
+    const group = getCurrentGroup();
+    if (!group) return false;
+    return hasAllDecisionsForGroup(group.group_index);
 }
 
 // ==================== Actions ====================
@@ -409,6 +437,45 @@ function removeCurrentGroup() {
     refreshSummary();
 }
 
+async function confirmSuperGroup() {
+    const rule = state.dupesActiveFolderRule;
+    if (!rule) return;
+
+    // Disable the batch confirm button during request
+    const batchBtn = document.getElementById('dupes-batch-confirm');
+    if (batchBtn) {
+        batchBtn.disabled = true;
+        batchBtn.textContent = 'Trashing...';
+    }
+
+    try {
+        const result = await trashFolderRule(
+            state.dupesType,
+            rule.keepFolder,
+            rule.trashFolder,
+        );
+
+        if (result.errors.length > 0) {
+            const msgs = result.errors.map(e => `${e.file_id}: ${e.error}`).join('\n');
+            console.warn('Some files failed to trash:', msgs);
+        }
+
+        state.dupesResolvedCount += result.groups_resolved;
+        state.dupesActiveFolderRule = null;
+        state.dupesDecisions.clear();
+
+        // Reload groups from server to get fresh state
+        await loadGroups();
+        refreshSummary();
+    } catch (err) {
+        console.error('Failed to trash files:', err);
+        if (batchBtn) {
+            batchBtn.disabled = false;
+            batchBtn.textContent = 'Confirm all groups';
+        }
+    }
+}
+
 function prevGroup() {
     if (state.dupesCurrentGroupIndex > 0) {
         state.dupesCurrentGroupIndex--;
@@ -419,7 +486,12 @@ function prevGroup() {
 
 function applyFolderRule(superGroup, keepFolderIndex) {
     const keepFolder = superGroup.folders[keepFolderIndex];
+    const trashFolder = superGroup.folders[1 - keepFolderIndex];
 
+    // Store the active rule for server-side batch confirm
+    state.dupesActiveFolderRule = { keepFolder, trashFolder };
+
+    // Apply decisions to loaded groups for visual feedback
     for (const groupIndex of superGroup.group_indices) {
         const group = state.dupesGroups.find(g => g.group_index === groupIndex);
         if (!group) continue;
@@ -505,7 +577,11 @@ function handleKeyboard(e) {
 
         case 'Enter':
             e.preventDefault();
-            confirmGroup();
+            if (e.shiftKey) {
+                confirmSuperGroup();
+            } else {
+                confirmGroup();
+            }
             break;
 
         case 's':

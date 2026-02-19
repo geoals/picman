@@ -64,6 +64,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/duplicates", get(handlers::get_duplicates))
         .route("/api/duplicates/trash", post(handlers::trash_files))
         .route(
+            "/api/duplicates/trash-folder-rule",
+            post(handlers::trash_folder_rule),
+        )
+        .route(
             "/api/directories/{id}/files",
             get(handlers::get_directory_files),
         )
@@ -578,6 +582,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_trash_batch_removes_all_from_db() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let library_path = tmp_dir.path().to_path_buf();
+
+        // Create directory structure with 6 files (simulating a large batch confirm)
+        let photos_dir = library_path.join("photos");
+        let backup_dir = library_path.join("backup");
+        std::fs::create_dir_all(&photos_dir).unwrap();
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        let db = Database::open_in_memory().unwrap();
+        let dir1 = db.insert_directory("photos", None, None).unwrap();
+        let dir2 = db.insert_directory("backup", None, None).unwrap();
+
+        let mut file_ids = Vec::new();
+        for i in 0..6 {
+            let (dir_id, dir_path) = if i % 2 == 0 {
+                (dir1, &photos_dir)
+            } else {
+                (dir2, &backup_dir)
+            };
+            let filename = format!("file_{}.jpg", i);
+            std::fs::write(dir_path.join(&filename), format!("data {}", i)).unwrap();
+            let fid = db.insert_file(dir_id, &filename, 10, i * 100, Some("image")).unwrap();
+            file_ids.push(fid);
+        }
+
+        let state = Arc::new(AppState {
+            db: Arc::new(Mutex::new(db)),
+            library_path: library_path.clone(),
+        });
+
+        let ids_json: Vec<String> = file_ids.iter().map(|id| id.to_string()).collect();
+        let body = format!(r#"{{"file_ids": [{}]}}"#, ids_json.join(","));
+
+        let app = build_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/duplicates/trash")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["trashed"], 6);
+        assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+        // All files should be removed from the database
+        let db = state.db.lock().unwrap();
+        for file_id in &file_ids {
+            assert!(
+                db.get_file_with_path(*file_id).unwrap().is_none(),
+                "File {} should have been removed from DB",
+                file_id
+            );
+        }
+
+        // All files should exist in .picman-trash
+        assert!(library_path.join(".picman-trash/photos/file_0.jpg").exists());
+        assert!(library_path.join(".picman-trash/backup/file_1.jpg").exists());
+    }
+
+    #[tokio::test]
     async fn test_remove_directory_tag() {
         let (state, dir_id) = test_state_with_dir();
         {
@@ -602,5 +675,144 @@ mod tests {
         let tags = json["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0], "2024");
+    }
+
+    #[tokio::test]
+    async fn test_trash_folder_rule_exact() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let library_path = tmp_dir.path().to_path_buf();
+
+        // Create two directories with 3 pairs of exact duplicates
+        let keep_dir = library_path.join("photos");
+        let trash_dir = library_path.join("backup");
+        std::fs::create_dir_all(&keep_dir).unwrap();
+        std::fs::create_dir_all(&trash_dir).unwrap();
+
+        let db = Database::open_in_memory().unwrap();
+        let dir_keep = db.insert_directory("photos", None, None).unwrap();
+        let dir_trash = db.insert_directory("backup", None, None).unwrap();
+
+        // 3 duplicate groups between photos/ and backup/
+        let hashes = ["hash_aaa", "hash_bbb", "hash_ccc"];
+        let mut keep_ids = Vec::new();
+        let mut trash_ids = Vec::new();
+
+        for (i, hash) in hashes.iter().enumerate() {
+            let name_keep = format!("img_{}.jpg", i);
+            let name_trash = format!("img_{}_copy.jpg", i);
+            std::fs::write(keep_dir.join(&name_keep), format!("data_keep_{}", i)).unwrap();
+            std::fs::write(trash_dir.join(&name_trash), format!("data_trash_{}", i)).unwrap();
+
+            let fk = db
+                .insert_file(dir_keep, &name_keep, 1000, (i * 100) as i64, Some("image"))
+                .unwrap();
+            let ft = db
+                .insert_file(dir_trash, &name_trash, 1000, (i * 100 + 1) as i64, Some("image"))
+                .unwrap();
+            db.set_file_hash(fk, hash).unwrap();
+            db.set_file_hash(ft, hash).unwrap();
+            keep_ids.push(fk);
+            trash_ids.push(ft);
+        }
+
+        let state = Arc::new(AppState {
+            db: Arc::new(Mutex::new(db)),
+            library_path: library_path.clone(),
+        });
+
+        let app = build_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/duplicates/trash-folder-rule")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"match_type":"exact","keep_folder":"photos","trash_folder":"backup"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = body_json(response).await;
+        assert_eq!(json["trashed"], 3);
+        assert_eq!(json["groups_resolved"], 3);
+        assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+        // Keep files should still exist
+        for id in &keep_ids {
+            let db = state.db.lock().unwrap();
+            assert!(db.get_file_with_path(*id).unwrap().is_some());
+        }
+
+        // Trash files should be gone from DB
+        for id in &trash_ids {
+            let db = state.db.lock().unwrap();
+            assert!(
+                db.get_file_with_path(*id).unwrap().is_none(),
+                "File {} should have been removed from DB",
+                id
+            );
+        }
+
+        // Trash files should be in .picman-trash
+        for i in 0..3 {
+            assert!(library_path
+                .join(format!(".picman-trash/backup/img_{}_copy.jpg", i))
+                .exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_folder_super_groups_span_all_pages() {
+        // Create enough groups to span 2 pages and verify super-group count is correct
+        let db = Database::open_in_memory().unwrap();
+        let dir1 = db.insert_directory("photos", None, None).unwrap();
+        let dir2 = db.insert_directory("backup", None, None).unwrap();
+
+        // Create 3 duplicate groups between the same two folders
+        for i in 0..3 {
+            let f1 = db
+                .insert_file(dir1, &format!("f{}.jpg", i), 1000, (i * 100) as i64, Some("image"))
+                .unwrap();
+            let f2 = db
+                .insert_file(dir2, &format!("f{}_copy.jpg", i), 1000, (i * 100 + 1) as i64, Some("image"))
+                .unwrap();
+            db.set_file_hash(f1, &format!("hash_{}", i)).unwrap();
+            db.set_file_hash(f2, &format!("hash_{}", i)).unwrap();
+        }
+
+        let state = Arc::new(AppState {
+            db: Arc::new(Mutex::new(db)),
+            library_path: PathBuf::from("/tmp/test-library"),
+        });
+
+        // Request only page 1 with per_page=1 (so only 1 group on this page)
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/duplicates?type=exact&page=1&per_page=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let json = body_json(response).await;
+        assert_eq!(json["total_groups"], 3);
+        assert_eq!(json["groups"].as_array().unwrap().len(), 1);
+
+        // Super-group should reference ALL 3 groups, not just the 1 on this page
+        let super_groups = json["folder_super_groups"].as_array().unwrap();
+        assert_eq!(super_groups.len(), 1);
+        let sg = &super_groups[0];
+        assert_eq!(
+            sg["group_indices"].as_array().unwrap().len(),
+            3,
+            "Super-group should include all 3 groups, not just the page subset"
+        );
     }
 }

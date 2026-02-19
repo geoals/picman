@@ -105,3 +105,12 @@ export async function fetchDuplicates(type = 'exact', threshold = 8, page = 1, p
 export async function trashFiles(fileIds) {
     return apiRequest('/api/duplicates/trash', 'POST', { file_ids: fileIds });
 }
+
+export async function trashFolderRule(matchType, keepFolder, trashFolder, threshold = 8) {
+    return apiRequest('/api/duplicates/trash-folder-rule', 'POST', {
+        match_type: matchType,
+        keep_folder: keepFolder,
+        trash_folder: trashFolder,
+        threshold,
+    });
+}

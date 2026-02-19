@@ -443,6 +443,41 @@ fn batch_get_file_tags(
     Ok(result)
 }
 
+fn batch_get_file_dirs(
+    conn: &rusqlite::Connection,
+    file_ids: &[i64],
+) -> Result<HashMap<i64, String>, rusqlite::Error> {
+    if file_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut result: HashMap<i64, String> = HashMap::new();
+
+    // Chunk to avoid SQLite variable limit (999)
+    for chunk in file_ids.chunks(500) {
+        let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT f.id, d.path FROM files f
+             JOIN directories d ON f.directory_id = d.id
+             WHERE f.id IN ({})",
+            placeholders
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(chunk.iter()),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?;
+
+        for row in rows {
+            let (file_id, dir_path) = row?;
+            result.insert(file_id, dir_path);
+        }
+    }
+
+    Ok(result)
+}
+
 // ==================== Thumbnail Serving ====================
 
 pub async fn serve_web_thumbnail(
@@ -651,6 +686,20 @@ fn build_exact_response(
     let exact_groups = db.find_duplicates_with_paths()?;
     let total_groups = exact_groups.len();
 
+    // Compute folder super-groups from ALL groups before pagination
+    let all_group_folders: Vec<(usize, Vec<String>)> = exact_groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let mut dirs: Vec<String> = g.files.iter().map(|(_, dir)| dir.clone()).collect();
+            dirs.sort();
+            dirs.dedup();
+            (i, dirs)
+        })
+        .collect();
+    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
+
+    // Paginate
     let start = (page - 1) * per_page;
     let paged_groups: Vec<_> = exact_groups
         .into_iter()
@@ -667,7 +716,6 @@ fn build_exact_response(
     let all_tags = batch_get_file_tags(conn, &all_file_ids)?;
 
     let mut groups = Vec::new();
-    let mut all_group_folders: Vec<(usize, Vec<String>)> = Vec::new();
 
     for (group_index, dup_group) in &paged_groups {
         let files: Vec<DuplicateFileResponse> = dup_group
@@ -688,15 +736,6 @@ fn build_exact_response(
 
         let suggested_keep_id = suggest_keep_id(&files);
 
-        let unique_dirs: Vec<String> = {
-            let mut dirs: Vec<String> =
-                files.iter().map(|f| f.directory_path.clone()).collect();
-            dirs.sort();
-            dirs.dedup();
-            dirs
-        };
-        all_group_folders.push((*group_index, unique_dirs));
-
         groups.push(DuplicateGroupResponse {
             group_index: *group_index,
             match_type: "exact".to_string(),
@@ -706,8 +745,6 @@ fn build_exact_response(
             suggested_keep_id,
         });
     }
-
-    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
 
     Ok(DuplicatesResponse {
         groups,
@@ -752,6 +789,27 @@ fn build_similar_response(
         .collect();
 
     let total_groups = filtered_groups.len();
+
+    // Compute folder super-groups from ALL groups before pagination
+    let all_similar_ids: Vec<i64> = filtered_groups.iter().flat_map(|g| g.iter().copied()).collect();
+    let file_dir_map = batch_get_file_dirs(conn, &all_similar_ids)?;
+
+    let all_group_folders: Vec<(usize, Vec<String>)> = filtered_groups
+        .iter()
+        .enumerate()
+        .map(|(i, fids)| {
+            let mut dirs: Vec<String> = fids
+                .iter()
+                .filter_map(|id| file_dir_map.get(id).cloned())
+                .collect();
+            dirs.sort();
+            dirs.dedup();
+            (i, dirs)
+        })
+        .collect();
+    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
+
+    // Paginate
     let start = (page - 1) * per_page;
     let paged_groups: Vec<_> = filtered_groups
         .into_iter()
@@ -771,7 +829,6 @@ fn build_similar_response(
     let all_tags = batch_get_file_tags(conn, &all_file_ids)?;
 
     let mut groups = Vec::new();
-    let mut all_group_folders: Vec<(usize, Vec<String>)> = Vec::new();
 
     for (group_index, file_ids) in &paged_groups {
         let mut files = Vec::new();
@@ -810,15 +867,6 @@ fn build_similar_response(
 
         let suggested_keep_id = suggest_keep_id(&files);
 
-        let unique_dirs: Vec<String> = {
-            let mut dirs: Vec<String> =
-                files.iter().map(|f| f.directory_path.clone()).collect();
-            dirs.sort();
-            dirs.dedup();
-            dirs
-        };
-        all_group_folders.push((*group_index, unique_dirs));
-
         groups.push(DuplicateGroupResponse {
             group_index: *group_index,
             match_type: "similar".to_string(),
@@ -828,8 +876,6 @@ fn build_similar_response(
             suggested_keep_id,
         });
     }
-
-    let folder_super_groups = compute_folder_super_groups(&all_group_folders);
 
     Ok(DuplicatesResponse {
         groups,
@@ -893,12 +939,31 @@ pub async fn trash_files(
         }));
     }
 
-    let library_path = state.library_path.clone();
-    let db = state.db.clone();
+    let (trashed, errors) = execute_trash(
+        state.db.clone(),
+        state.library_path.clone(),
+        body.file_ids,
+    )
+    .await?;
+
+    Ok(Json(TrashFilesResponse { trashed, errors }))
+}
+
+/// Reusable trash logic: resolve paths → move files → delete from DB.
+/// Returns (trashed_count, errors).
+async fn execute_trash(
+    db: Arc<Mutex<Database>>,
+    library_path: PathBuf,
+    file_ids: Vec<i64>,
+) -> Result<(usize, Vec<TrashErrorResponse>), AppError> {
+    if file_ids.is_empty() {
+        return Ok((0, vec![]));
+    }
 
     // Phase 1: resolve file paths from DB
     let file_paths: Vec<(i64, PathBuf, String, String)> = spawn_db(db.clone(), {
-        let file_ids = body.file_ids.clone();
+        let library_path = library_path.clone();
+        let file_ids = file_ids.clone();
         move |db| {
             let mut paths = Vec::new();
             for file_id in &file_ids {
@@ -917,73 +982,75 @@ pub async fn trash_files(
     .await?;
 
     // Phase 2: move files + delete thumbnails (no DB lock held)
-    let library_path = state.library_path.clone();
     let move_results: Vec<(i64, Result<(), String>)> =
-        tokio::task::spawn_blocking(move || {
-            let trash_root = library_path.join(".picman-trash");
-            let mut results = Vec::new();
+        tokio::task::spawn_blocking({
+            let library_path = library_path.clone();
+            move || {
+                let trash_root = library_path.join(".picman-trash");
+                let mut results = Vec::new();
 
-            for (file_id, full_path, dir_path, filename) in &file_paths {
-                let result = (|| -> Result<(), String> {
-                    if !full_path.exists() {
-                        return Err(format!("File not found: {}", full_path.display()));
-                    }
+                for (file_id, full_path, dir_path, filename) in &file_paths {
+                    let result = (|| -> Result<(), String> {
+                        if !full_path.exists() {
+                            return Err(format!("File not found: {}", full_path.display()));
+                        }
 
-                    // Compute thumbnail paths BEFORE moving (needs fs::metadata)
-                    let thumb_path = thumbnails::get_thumbnail_path(full_path);
-                    let video_thumb_path = thumbnails::get_video_thumbnail_path(full_path);
-                    let web_thumb_path = thumbnails::get_web_thumbnail_path(full_path);
+                        // Compute thumbnail paths BEFORE moving (needs fs::metadata)
+                        let thumb_path = thumbnails::get_thumbnail_path(full_path);
+                        let video_thumb_path = thumbnails::get_video_thumbnail_path(full_path);
+                        let web_thumb_path = thumbnails::get_web_thumbnail_path(full_path);
 
-                    // Compute trash destination
-                    let trash_dir = if dir_path.is_empty() {
-                        trash_root.clone()
-                    } else {
-                        trash_root.join(dir_path)
-                    };
-                    let mut trash_path = trash_dir.join(filename);
+                        // Compute trash destination
+                        let trash_dir = if dir_path.is_empty() {
+                            trash_root.clone()
+                        } else {
+                            trash_root.join(dir_path)
+                        };
+                        let mut trash_path = trash_dir.join(filename);
 
-                    // Handle name conflicts
-                    if trash_path.exists() {
-                        let stem = std::path::Path::new(filename)
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        let ext = std::path::Path::new(filename)
-                            .extension()
-                            .map(|e| format!(".{}", e.to_string_lossy()))
-                            .unwrap_or_default();
-                        for i in 2.. {
-                            trash_path = trash_dir.join(format!("{}_{}{}", stem, i, ext));
-                            if !trash_path.exists() {
-                                break;
+                        // Handle name conflicts
+                        if trash_path.exists() {
+                            let stem = std::path::Path::new(filename)
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let ext = std::path::Path::new(filename)
+                                .extension()
+                                .map(|e| format!(".{}", e.to_string_lossy()))
+                                .unwrap_or_default();
+                            for i in 2.. {
+                                trash_path = trash_dir.join(format!("{}_{}{}", stem, i, ext));
+                                if !trash_path.exists() {
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    std::fs::create_dir_all(&trash_dir)
-                        .map_err(|e| format!("Failed to create trash dir: {}", e))?;
-                    std::fs::rename(full_path, &trash_path)
-                        .map_err(|e| format!("Failed to move file: {}", e))?;
+                        std::fs::create_dir_all(&trash_dir)
+                            .map_err(|e| format!("Failed to create trash dir: {}", e))?;
+                        std::fs::rename(full_path, &trash_path)
+                            .map_err(|e| format!("Failed to move file: {}", e))?;
 
-                    // Delete thumbnails (ignore errors — may not exist)
-                    if let Some(p) = thumb_path {
-                        let _ = std::fs::remove_file(p);
-                    }
-                    if let Some(p) = video_thumb_path {
-                        let _ = std::fs::remove_file(p);
-                    }
-                    if let Some(p) = web_thumb_path {
-                        let _ = std::fs::remove_file(p);
-                    }
+                        // Delete thumbnails (ignore errors — may not exist)
+                        if let Some(p) = thumb_path {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        if let Some(p) = video_thumb_path {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        if let Some(p) = web_thumb_path {
+                            let _ = std::fs::remove_file(p);
+                        }
 
-                    Ok(())
-                })();
+                        Ok(())
+                    })();
 
-                results.push((*file_id, result));
+                    results.push((*file_id, result));
+                }
+
+                results
             }
-
-            results
         })
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -1007,9 +1074,11 @@ pub async fn trash_files(
 
     if !successfully_moved.is_empty() {
         spawn_db(db, move |db| {
+            db.begin_transaction()?;
             for file_id in &successfully_moved {
                 db.delete_file(*file_id)?;
             }
+            db.commit()?;
             Ok(())
         })
         .await?;
@@ -1017,7 +1086,118 @@ pub async fn trash_files(
 
     let trashed = move_results.iter().filter(|(_, r)| r.is_ok()).count();
 
-    Ok(Json(TrashFilesResponse { trashed, errors }))
+    Ok((trashed, errors))
+}
+
+pub async fn trash_folder_rule(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TrashFolderRuleRequest>,
+) -> Result<Json<TrashFolderRuleResponse>, AppError> {
+    let db = state.db.clone();
+    let keep_folder = body.keep_folder.clone();
+    let trash_folder = body.trash_folder.clone();
+    let match_type = body.match_type.clone();
+    let threshold = body.threshold.unwrap_or(8);
+
+    // Collect file IDs to trash from ALL matching groups
+    let (file_ids_to_trash, groups_resolved) = spawn_db(db.clone(), move |db| {
+        let conn = db.connection();
+
+        match match_type.as_str() {
+            "exact" => {
+                let exact_groups = db.find_duplicates_with_paths()?;
+                let mut to_trash = Vec::new();
+                let mut resolved = 0usize;
+
+                for group in &exact_groups {
+                    let has_keep = group.files.iter().any(|(_, dir)| *dir == keep_folder);
+                    let has_trash = group.files.iter().any(|(_, dir)| *dir == trash_folder);
+
+                    if has_keep && has_trash {
+                        for (f, dir) in &group.files {
+                            if *dir == trash_folder {
+                                to_trash.push(f.id);
+                            }
+                        }
+                        resolved += 1;
+                    }
+                }
+
+                Ok((to_trash, resolved))
+            }
+            "similar" => {
+                // Get exact duplicate file IDs to exclude
+                let exact_groups = db.find_duplicates_with_paths()?;
+                let exact_file_ids: std::collections::HashSet<i64> = exact_groups
+                    .iter()
+                    .flat_map(|g| g.files.iter().map(|(f, _)| f.id))
+                    .collect();
+
+                let hashes_raw = db.get_all_perceptual_hashes()?;
+                let hashes_u64: Vec<(i64, u64)> = hashes_raw
+                    .iter()
+                    .map(|(id, h)| (*id, *h as u64))
+                    .collect();
+                let similar_groups_raw =
+                    perceptual_hash::group_by_similarity(&hashes_u64, threshold);
+
+                // Filter: keep groups with 2+ non-exact files
+                let filtered_groups: Vec<Vec<i64>> = similar_groups_raw
+                    .into_iter()
+                    .map(|group| {
+                        group
+                            .into_iter()
+                            .filter(|id| !exact_file_ids.contains(id))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|group| group.len() >= 2)
+                    .collect();
+
+                // Get dir paths for all files
+                let all_ids: Vec<i64> =
+                    filtered_groups.iter().flat_map(|g| g.iter().copied()).collect();
+                let dir_map = batch_get_file_dirs(conn, &all_ids)?;
+
+                let mut to_trash = Vec::new();
+                let mut resolved = 0usize;
+
+                for group in &filtered_groups {
+                    let has_keep = group
+                        .iter()
+                        .any(|id| dir_map.get(id).map(|d| d.as_str()) == Some(&keep_folder));
+                    let has_trash = group
+                        .iter()
+                        .any(|id| dir_map.get(id).map(|d| d.as_str()) == Some(&trash_folder));
+
+                    if has_keep && has_trash {
+                        for id in group {
+                            if dir_map.get(id).map(|d| d.as_str()) == Some(&trash_folder) {
+                                to_trash.push(*id);
+                            }
+                        }
+                        resolved += 1;
+                    }
+                }
+
+                Ok((to_trash, resolved))
+            }
+            _ => Err(anyhow::anyhow!("Invalid match_type: must be 'exact' or 'similar'")),
+        }
+    })
+    .await?;
+
+    let (trashed, errors) = execute_trash(
+        db,
+        state.library_path.clone(),
+        file_ids_to_trash,
+    )
+    .await?;
+
+    Ok(Json(TrashFolderRuleResponse {
+        trashed,
+        groups_resolved,
+        errors,
+    }))
 }
 
 // ==================== Embedded Assets ====================

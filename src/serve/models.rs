@@ -124,3 +124,18 @@ pub struct TrashErrorResponse {
     pub file_id: i64,
     pub error: String,
 }
+
+#[derive(Deserialize)]
+pub struct TrashFolderRuleRequest {
+    pub match_type: String,
+    pub threshold: Option<u32>,
+    pub keep_folder: String,
+    pub trash_folder: String,
+}
+
+#[derive(Serialize)]
+pub struct TrashFolderRuleResponse {
+    pub trashed: usize,
+    pub groups_resolved: usize,
+    pub errors: Vec<TrashErrorResponse>,
+}
